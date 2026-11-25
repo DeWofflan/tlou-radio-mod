@@ -1,0 +1,39 @@
+{
+	"schemaVersion": 1,
+	"id": "tlouradio",
+	"version": "${version}",
+	"name": "TLOU2 Radio Mod",
+	"description": "Server-authoritative tactical radio system with Simple Voice Chat and GeckoLib integration.",
+	"authors": [
+		"TLOURadio Team"
+	],
+	"license": "All-Rights-Reserved",
+	"icon": "assets/tlouradio/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.tlouradio.TlouRadioMod"
+		],
+		"client": [
+			"com.tlouradio.TlouRadioClient"
+		],
+		"voicechat": [
+			"com.tlouradio.compat.TlouRadioVoicechatPlugin"
+		]
+	},
+	"mixins": [
+		"tlouradio.mixins.json",
+		{
+			"config": "tlouradio.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*",
+		"geckolib": ">=5.5.7",
+		"voicechat": ">=2.6.0"
+	}
+}

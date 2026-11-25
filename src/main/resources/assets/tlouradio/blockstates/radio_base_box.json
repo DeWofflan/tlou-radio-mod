@@ -1,0 +1,7 @@
+{
+	"variants": {
+		"": {
+			"model": "tlouradio:block/radio_base_box"
+		}
+	}
+}
