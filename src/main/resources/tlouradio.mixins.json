@@ -3,6 +3,9 @@
 	"package": "com.tlouradio.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"mixins": [
+		"InventoryMixin",
+		"PlayerEquipmentMixin",
+		"ServerGamePacketListenerImplMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

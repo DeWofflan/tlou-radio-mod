@@ -7,11 +7,11 @@
 - [x] `gradlew build` ve istemci/sunucu başlangıç testinin hatasız geçmesi.
 
 ## Faz 2: Ses Motoru ve Güvenlik Çekirdeği [Model: Carbon -> Neon]
-- [ ] El telsizi veri yapısının (açık/kapalı, frekans, şifre, bağlı `Network ID`) oluşturulması.
-- [ ] Sol tıkla telsizi açma/kapatma ve blok kırma iptalinin yazılması.
-- [ ] Özel PTT (Bas-Konuş) tuş ataması ve istemci-sunucu durum senkronizasyonu.
-- [ ] Event-Driven `RadioNetworkManager` (RAM haritası) yazılması.
-- [ ] `VoicechatPlugin` entegrasyonu ve sunucu taraflı güvenli ses yönlendirmesi (SVC grup sistemi olmadan).
+- [x] El telsizi veri yapısının (açık/kapalı, frekans, şifre, bağlı `Network ID`) oluşturulması.
+- [x] Sol tıkla telsizi açma/kapatma ve blok kırma iptalinin yazılması.
+- [x] Özel PTT (Bas-Konuş) tuş ataması ve istemci-sunucu durum senkronizasyonu.
+- [x] Event-Driven `RadioNetworkManager` (RAM haritası) yazılması.
+- [x] `VoicechatPlugin` entegrasyonu ve sunucu taraflı güvenli ses yönlendirmesi (SVC grup sistemi olmadan).
 
 ## Faz 3: Ana Telsiz Kutusu ve Sabotaj Mekaniği [Model: Neon]
 - [ ] Ana Kutu'nun benzersiz `Network ID`, frekans ve şifre üretme/saklama mantığı.

@@ -2,6 +2,8 @@ package com.tlouradio.item;
 
 import com.tlouradio.TlouRadioMod;
 import com.tlouradio.block.ModBlocks;
+import com.tlouradio.component.ModDataComponents;
+import com.tlouradio.component.RadioStateComponent;
 import net.fabricmc.fabric.api.creativetab.v1.FabricCreativeModeTab;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -18,7 +20,9 @@ public final class ModItems {
 	public static final Item HANDHELD_RADIO = registerItem(
 			"handheld_radio",
 			HandheldRadioItem::new,
-			new Item.Properties().stacksTo(1)
+			new Item.Properties()
+					.stacksTo(1)
+					.component(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT)
 	);
 
 	public static final CreativeModeTab CREATIVE_TAB = Registry.register(

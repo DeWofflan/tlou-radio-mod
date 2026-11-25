@@ -2,5 +2,15 @@
 	"item.tlouradio.handheld_radio": "El Telsizi",
 	"block.tlouradio.radio_base_box": "Ana Telsiz Kutusu",
 	"item.tlouradio.radio_base_box": "Ana Telsiz Kutusu",
-	"itemGroup.tlouradio": "TLOU2 Taktiksel Telsiz"
+	"itemGroup.tlouradio": "TLOU2 Taktiksel Telsiz",
+	"key.category.tlouradio.general": "TLOU2 Taktiksel Telsiz",
+	"key.tlouradio.ptt": "Telsiz Bas-Konuş (PTT)",
+	"message.tlouradio.power_on": "Telsiz AÇIK [%s MHz]",
+	"message.tlouradio.power_off": "Telsiz KAPALI",
+	"tooltip.tlouradio.power": "Güç: %s",
+	"tooltip.tlouradio.status_on": "AÇIK",
+	"tooltip.tlouradio.status_off": "KAPALI",
+	"tooltip.tlouradio.frequency": "Frekans: %s MHz",
+	"category.tlouradio.voicechat": "Taktiksel Telsizler",
+	"category.tlouradio.voicechat.description": "Gelen taktiksel telsiz yayınları"
 }

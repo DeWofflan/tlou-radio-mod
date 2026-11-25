@@ -2,5 +2,15 @@
 	"item.tlouradio.handheld_radio": "Handheld Radio",
 	"block.tlouradio.radio_base_box": "Radio Base Box",
 	"item.tlouradio.radio_base_box": "Radio Base Box",
-	"itemGroup.tlouradio": "TLOU2 Tactical Radio"
+	"itemGroup.tlouradio": "TLOU2 Tactical Radio",
+	"key.category.tlouradio.general": "TLOU2 Tactical Radio",
+	"key.tlouradio.ptt": "Radio Push-to-Talk (PTT)",
+	"message.tlouradio.power_on": "Radio ON [%s MHz]",
+	"message.tlouradio.power_off": "Radio OFF",
+	"tooltip.tlouradio.power": "Power: %s",
+	"tooltip.tlouradio.status_on": "ON",
+	"tooltip.tlouradio.status_off": "OFF",
+	"tooltip.tlouradio.frequency": "Frequency: %s MHz",
+	"category.tlouradio.voicechat": "Tactical Radios",
+	"category.tlouradio.voicechat.description": "Incoming tactical radio transmissions"
 }
