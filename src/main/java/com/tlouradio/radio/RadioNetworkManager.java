@@ -8,12 +8,18 @@ import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -57,6 +63,23 @@ public final class RadioNetworkManager {
 	}
 
 	/**
+	 * O(1) validation of a radio state against Overworld {@link RadioBaseNetworkSavedData}.
+	 * Open/free-frequency radios ({@code networkId.isEmpty()}) continue to operate freely.
+	 */
+	public static boolean isRadioStateAuthorized(MinecraftServer server, RadioStateComponent state) {
+		if (state == null || !state.isPowered()) {
+			return false;
+		}
+		if (state.networkId().isEmpty()) {
+			return true;
+		}
+		if (server == null) {
+			return false;
+		}
+		return RadioBaseNetworkSavedData.get(server).isValidChannel(state.toChannelKey());
+	}
+
+	/**
 	 * Recomputes a player's active listening channels and validates any ongoing PTT session.
 	 * Called strictly on the Minecraft server thread when inventory, equipment, or radio state changes.
 	 */
@@ -77,7 +100,7 @@ public final class RadioNetworkManager {
 
 	/**
 	 * Re-checks only the player's held hands when hotbar selection changes, cutting PTT immediately
-	 * if an active powered radio is no longer held.
+	 * if an active, authorized powered radio is no longer held.
 	 */
 	public static void revalidateHeldPtt(ServerPlayer player) {
 		if (player == null) {
@@ -101,7 +124,8 @@ public final class RadioNetworkManager {
 	}
 
 	/**
-	 * Server-authoritative PTT toggle handler. Rejects activation if the player is not holding a powered radio.
+	 * Server-authoritative PTT toggle handler. Rejects activation if the player is not holding
+	 * an authorized powered radio.
 	 */
 	public static boolean handlePttRequest(ServerPlayer player, boolean active) {
 		if (player == null) {
@@ -120,12 +144,78 @@ public final class RadioNetworkManager {
 		Optional<RadioChannelKey> heldChannel = findHeldPoweredRadioChannel(player);
 		if (heldChannel.isEmpty()) {
 			ACTIVE_TRANSMITTERS.remove(playerId);
+			if (holdsDisconnectedPairedPoweredRadio(player)) {
+				player.sendOverlayMessage(
+						Component.translatable("message.tlouradio.connection_lost").withStyle(ChatFormatting.RED)
+				);
+			}
 			return false;
 		}
 
 		syncPlayer(player);
 		ACTIVE_TRANSMITTERS.put(playerId, heldChannel.get());
 		return true;
+	}
+
+	/**
+	 * Sabotage & credential-change invalidation hook.
+	 * Immediately drops all affected online listeners and active PTT transmitters on {@code networkId}
+	 * and notifies impacted players via actionbar + disconnect sound.
+	 */
+	public static void invalidateBaseNetwork(MinecraftServer server, UUID networkId, boolean destroyed) {
+		if (server == null || networkId == null) {
+			return;
+		}
+		RadioBaseNetworkSavedData savedData = RadioBaseNetworkSavedData.get(server);
+		Set<UUID> affectedPlayerIds = new HashSet<>();
+
+		for (Map.Entry<UUID, Set<RadioChannelKey>> entry : PLAYER_SUBSCRIPTIONS.entrySet()) {
+			for (RadioChannelKey channel : entry.getValue()) {
+				if (networkId.equals(channel.networkId().orElse(null)) && !savedData.isValidChannel(channel)) {
+					affectedPlayerIds.add(entry.getKey());
+					break;
+				}
+			}
+		}
+
+		for (Map.Entry<UUID, RadioChannelKey> entry : ACTIVE_TRANSMITTERS.entrySet()) {
+			RadioChannelKey channel = entry.getValue();
+			if (networkId.equals(channel.networkId().orElse(null)) && !savedData.isValidChannel(channel)) {
+				affectedPlayerIds.add(entry.getKey());
+			}
+		}
+
+		if (affectedPlayerIds.isEmpty()) {
+			return;
+		}
+
+		String shortId = RadioStateComponent.shortNetworkId(networkId);
+		Component disconnectMessage = Component.translatable(
+				destroyed
+						? "message.tlouradio.base_destroyed_disconnect"
+						: "message.tlouradio.base_reconfigured_disconnect",
+				shortId
+		).withStyle(ChatFormatting.RED);
+
+		for (UUID playerId : affectedPlayerIds) {
+			ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+			if (player != null && !player.hasDisconnected()) {
+				syncPlayer(player);
+				player.sendOverlayMessage(disconnectMessage);
+				player.level().playSound(
+						null,
+						player.getX(),
+						player.getY(),
+						player.getZ(),
+						SoundEvents.BEACON_DEACTIVATE,
+						SoundSource.PLAYERS,
+						0.35F,
+						1.8F
+				);
+			} else {
+				removePlayer(playerId);
+			}
+		}
 	}
 
 	public static void removePlayer(UUID playerId) {
@@ -179,38 +269,54 @@ public final class RadioNetworkManager {
 
 	private static Set<RadioChannelKey> collectPoweredRadioChannels(ServerPlayer player) {
 		Set<RadioChannelKey> channels = new HashSet<>();
+		MinecraftServer server = player.level().getServer();
 		Inventory inventory = player.getInventory();
 		for (ItemStack stack : inventory.getNonEquipmentItems()) {
-			addChannelIfPoweredRadio(stack, channels);
+			addChannelIfAuthorizedPoweredRadio(server, stack, channels);
 		}
-		addChannelIfPoweredRadio(player.getOffhandItem(), channels);
+		addChannelIfAuthorizedPoweredRadio(server, player.getOffhandItem(), channels);
 		return channels;
 	}
 
-	private static void addChannelIfPoweredRadio(ItemStack stack, Set<RadioChannelKey> out) {
+	private static void addChannelIfAuthorizedPoweredRadio(MinecraftServer server, ItemStack stack, Set<RadioChannelKey> out) {
 		if (stack == null || stack.isEmpty() || !(stack.getItem() instanceof HandheldRadioItem)) {
 			return;
 		}
 		RadioStateComponent state = stack.getOrDefault(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT);
-		if (state.isPowered()) {
+		if (isRadioStateAuthorized(server, state)) {
 			out.add(state.toChannelKey());
 		}
 	}
 
 	private static Optional<RadioChannelKey> findHeldPoweredRadioChannel(ServerPlayer player) {
-		Optional<RadioChannelKey> mainHand = extractPoweredChannel(player.getMainHandItem());
+		MinecraftServer server = player.level().getServer();
+		Optional<RadioChannelKey> mainHand = extractAuthorizedPoweredChannel(server, player.getMainHandItem());
 		if (mainHand.isPresent()) {
 			return mainHand;
 		}
-		return extractPoweredChannel(player.getOffhandItem());
+		return extractAuthorizedPoweredChannel(server, player.getOffhandItem());
 	}
 
-	private static Optional<RadioChannelKey> extractPoweredChannel(ItemStack stack) {
+	private static Optional<RadioChannelKey> extractAuthorizedPoweredChannel(MinecraftServer server, ItemStack stack) {
 		if (stack == null || stack.isEmpty() || !(stack.getItem() instanceof HandheldRadioItem)) {
 			return Optional.empty();
 		}
 		RadioStateComponent state = stack.getOrDefault(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT);
-		return state.isPowered() ? Optional.of(state.toChannelKey()) : Optional.empty();
+		return isRadioStateAuthorized(server, state) ? Optional.of(state.toChannelKey()) : Optional.empty();
+	}
+
+	private static boolean holdsDisconnectedPairedPoweredRadio(ServerPlayer player) {
+		MinecraftServer server = player.level().getServer();
+		return isDisconnectedPairedPoweredRadio(server, player.getMainHandItem())
+				|| isDisconnectedPairedPoweredRadio(server, player.getOffhandItem());
+	}
+
+	private static boolean isDisconnectedPairedPoweredRadio(MinecraftServer server, ItemStack stack) {
+		if (stack == null || stack.isEmpty() || !(stack.getItem() instanceof HandheldRadioItem)) {
+			return false;
+		}
+		RadioStateComponent state = stack.getOrDefault(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT);
+		return state.isPowered() && state.networkId().isPresent() && !isRadioStateAuthorized(server, state);
 	}
 
 	private static void updateSubscriptions(UUID playerId, Set<RadioChannelKey> desiredChannels) {

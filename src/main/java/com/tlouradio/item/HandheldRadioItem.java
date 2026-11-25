@@ -41,5 +41,12 @@ public class HandheldRadioItem extends Item {
 
 		tooltipAdder.accept(Component.translatable("tooltip.tlouradio.power", statusText).withStyle(ChatFormatting.GRAY));
 		tooltipAdder.accept(Component.translatable("tooltip.tlouradio.frequency", state.frequency()).withStyle(ChatFormatting.GRAY));
+
+		if (state.networkId().isPresent()) {
+			String shortId = RadioStateComponent.shortNetworkId(state.networkId().get());
+			tooltipAdder.accept(Component.translatable("tooltip.tlouradio.network_paired", shortId).withStyle(ChatFormatting.AQUA));
+		} else {
+			tooltipAdder.accept(Component.translatable("tooltip.tlouradio.network_open").withStyle(ChatFormatting.DARK_GRAY));
+		}
 	}
 }

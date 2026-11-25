@@ -14,9 +14,9 @@
 - [x] `VoicechatPlugin` entegrasyonu ve sunucu taraflı güvenli ses yönlendirmesi (SVC grup sistemi olmadan).
 
 ## Faz 3: Ana Telsiz Kutusu ve Sabotaj Mekaniği [Model: Neon]
-- [ ] Ana Kutu'nun benzersiz `Network ID`, frekans ve şifre üretme/saklama mantığı.
-- [ ] El telsizinin Ana Kutu ile eşleşme mekaniği.
-- [ ] Ana Kutu kırıldığında veya şifre/frekans değiştiğinde bağlı tüm telsizlerin bağlantısının anında kesilmesi ve bildirim/ses tetiklenmesi.
+- [x] Ana Kutu'nun benzersiz `Network ID`, frekans ve şifre üretme/saklama mantığı.
+- [x] El telsizinin Ana Kutu ile eşleşme mekaniği.
+- [x] Ana Kutu kırıldığında veya şifre/frekans değiştiğinde bağlı tüm telsizlerin bağlantısının anında kesilmesi ve bildirim/ses tetiklenmesi.
 
 ## Faz 4: 3D Cihaz İnceleme Ekranı [Model: Neon]
 - [ ] Sağ tıkla oyuncunun hareketinin kilitlenmesi ve özel `RadioScreen` arayüzünün açılması.

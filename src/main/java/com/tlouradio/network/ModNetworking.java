@@ -1,15 +1,20 @@
 package com.tlouradio.network;
 
+import com.tlouradio.block.entity.RadioBaseBoxBlockEntity;
 import com.tlouradio.component.ModDataComponents;
 import com.tlouradio.component.RadioStateComponent;
 import com.tlouradio.item.HandheldRadioItem;
+import com.tlouradio.network.payload.OpenBaseBoxScreenPayload;
 import com.tlouradio.network.payload.RadioPttPayload;
 import com.tlouradio.network.payload.ToggleRadioPowerPayload;
+import com.tlouradio.network.payload.UpdateBaseBoxConfigPayload;
 import com.tlouradio.radio.RadioNetworkManager;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.ChatFormatting;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 
@@ -18,6 +23,11 @@ public final class ModNetworking {
 	}
 
 	public static void initialize() {
+		PayloadTypeRegistry.clientboundPlay().register(
+				OpenBaseBoxScreenPayload.TYPE,
+				OpenBaseBoxScreenPayload.STREAM_CODEC
+		);
+
 		PayloadTypeRegistry.serverboundPlay().register(
 				ToggleRadioPowerPayload.TYPE,
 				ToggleRadioPowerPayload.STREAM_CODEC
@@ -25,6 +35,10 @@ public final class ModNetworking {
 		PayloadTypeRegistry.serverboundPlay().register(
 				RadioPttPayload.TYPE,
 				RadioPttPayload.STREAM_CODEC
+		);
+		PayloadTypeRegistry.serverboundPlay().register(
+				UpdateBaseBoxConfigPayload.TYPE,
+				UpdateBaseBoxConfigPayload.STREAM_CODEC
 		);
 
 		ServerPlayNetworking.registerGlobalReceiver(ToggleRadioPowerPayload.TYPE, (payload, context) -> {
@@ -47,15 +61,61 @@ public final class ModNetworking {
 
 			RadioNetworkManager.syncPlayer(player);
 
-			Component statusMessage = updated.isPowered()
-					? Component.translatable("message.tlouradio.power_on", updated.frequency()).withStyle(ChatFormatting.GREEN)
-					: Component.translatable("message.tlouradio.power_off").withStyle(ChatFormatting.RED);
+			Component statusMessage;
+			if (!updated.isPowered()) {
+				statusMessage = Component.translatable("message.tlouradio.power_off").withStyle(ChatFormatting.RED);
+			} else if (updated.networkId().isPresent()
+					&& !RadioNetworkManager.isRadioStateAuthorized(player.level().getServer(), updated)) {
+				statusMessage = Component.translatable("message.tlouradio.power_on_no_signal", updated.frequency())
+						.withStyle(ChatFormatting.GOLD);
+			} else {
+				statusMessage = Component.translatable("message.tlouradio.power_on", updated.frequency())
+						.withStyle(ChatFormatting.GREEN);
+			}
 			player.sendOverlayMessage(statusMessage);
 		});
 
 		ServerPlayNetworking.registerGlobalReceiver(RadioPttPayload.TYPE, (payload, context) -> {
 			ServerPlayer player = context.player();
 			RadioNetworkManager.handlePttRequest(player, payload.active());
+		});
+
+		ServerPlayNetworking.registerGlobalReceiver(UpdateBaseBoxConfigPayload.TYPE, (payload, context) -> {
+			ServerPlayer player = context.player();
+			if (!player.isAlive() || player.isSpectator() || player.hasDisconnected()) {
+				return;
+			}
+
+			BlockPos pos = payload.pos();
+			if (!player.isWithinBlockInteractionRange(pos, 4.0D)) {
+				return;
+			}
+
+			ServerLevel serverLevel = player.level();
+			if (!serverLevel.isLoaded(pos)) {
+				return;
+			}
+			if (!(serverLevel.getBlockEntity(pos) instanceof RadioBaseBoxBlockEntity baseBox)) {
+				return;
+			}
+
+			String frequency = payload.frequency();
+			String passcode = payload.passcode();
+			if (!RadioStateComponent.isValidFrequency(frequency) || !RadioStateComponent.isValidPasscode(passcode)) {
+				player.sendOverlayMessage(
+						Component.translatable("message.tlouradio.base_box_invalid_input").withStyle(ChatFormatting.RED)
+				);
+				return;
+			}
+
+			boolean changed = baseBox.updateConfiguration(serverLevel, frequency, passcode);
+			if (changed) {
+				RadioNetworkManager.invalidateBaseNetwork(serverLevel.getServer(), baseBox.getNetworkId(), false);
+			}
+
+			player.sendOverlayMessage(
+					Component.translatable("message.tlouradio.base_box_saved", frequency).withStyle(ChatFormatting.GREEN)
+			);
 		});
 	}
 }
