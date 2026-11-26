@@ -1,6 +1,9 @@
 {
 	"model": {
-		"type": "minecraft:model",
-		"model": "tlouradio:item/radio_base_box"
+		"type": "minecraft:special",
+		"base": "tlouradio:item/radio_base_box",
+		"model": {
+			"type": "geckolib:geckolib"
+		}
 	}
 }

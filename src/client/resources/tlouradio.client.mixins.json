@@ -3,6 +3,8 @@
 	"package": "com.tlouradio.mixin.client",
 	"compatibilityLevel": "JAVA_25",
 	"client": [
+		"FirstPersonHandsAndItemsMixin",
+		"FirstPersonHandsAndItemsRendererMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

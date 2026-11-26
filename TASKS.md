@@ -23,8 +23,11 @@
 - [x] Ekranda 3D telsiz modelinin konumlandırılması.
 - [x] `0-9`, `Sil` ve `Enter` tuşlarının eklenmesi, sunucuya güvenli paketlerle frekans/şifre güncellemesi gönderilmesi.
 
-## Faz 5: Model, Animasyon ve Atmosfer [Model: Neon + Hydrogen]
-- [ ] Blockbench `.geo.json` modellerinin ve dokularının projeye eklenmesi.
-- [ ] GeckoLib 1. şahıs animasyonlarının (`.animation.json`) bağlanması.
+## Faz 5A: 3D GeckoLib Modelleri, 1. Şahıs Animasyonları ve Etkileşimli İnceleme Ekranı [Model: Carbon]
+- [x] Blockbench uyumlu GeckoLib 5 `.geo.json` modellerinin (`handheld_radio`, `radio_base_box`) ve 128x128 UV dokularının projeye eklenmesi.
+- [x] GeckoLib 1. şahıs animasyonlarının (`.animation.json` + bilek açılış salınımı, PTT ağıza yaklaşma, teleskopik anten yaylanması) ve 1. şahıs oyuncu kolu kavramasının (`FirstPersonHandsAndItemsRendererMixin`) bağlanması.
+- [x] `HandheldRadioScreen` üzerinde ±6° fare paralaksı, 3D fiziksel çökebilen tuşlar, sürüklenebilir teleskopik anten (`antennaExtended`), debounce destekli çevrilebilir `dial_knob` ve çakışma korumalı yan `ptt_button` etkileşimlerinin uygulanması.
+
+## Faz 5B: 3. Şahıs Animasyonu ve Ses Atmosferi [Model: Neon + Hydrogen]
 - [ ] 3. şahıs dürbün (`Spyglass`) kol kaldırma Mixin'inin yazılması ve ağ senkronizasyonu.
 - [ ] Telsiz ses filtresi (bandpass + hafif cızırtı) ve açılış/kapanış bip seslerinin eklenmesi.

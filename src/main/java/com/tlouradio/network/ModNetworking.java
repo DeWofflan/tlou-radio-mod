@@ -6,6 +6,8 @@ import com.tlouradio.component.RadioStateComponent;
 import com.tlouradio.item.HandheldRadioItem;
 import com.tlouradio.network.payload.OpenBaseBoxScreenPayload;
 import com.tlouradio.network.payload.RadioPttPayload;
+import com.tlouradio.network.payload.SetRadioAntennaPayload;
+import com.tlouradio.network.payload.StepRadioDialPayload;
 import com.tlouradio.network.payload.ToggleRadioPowerPayload;
 import com.tlouradio.network.payload.UpdateBaseBoxConfigPayload;
 import com.tlouradio.network.payload.UpdateHandheldRadioPayload;
@@ -48,6 +50,14 @@ public final class ModNetworking {
 				UpdateHandheldRadioPayload.TYPE,
 				UpdateHandheldRadioPayload.STREAM_CODEC
 		);
+		PayloadTypeRegistry.serverboundPlay().register(
+				SetRadioAntennaPayload.TYPE,
+				SetRadioAntennaPayload.STREAM_CODEC
+		);
+		PayloadTypeRegistry.serverboundPlay().register(
+				StepRadioDialPayload.TYPE,
+				StepRadioDialPayload.STREAM_CODEC
+		);
 
 		ServerPlayNetworking.registerGlobalReceiver(ToggleRadioPowerPayload.TYPE, (payload, context) -> {
 			ServerPlayer player = context.player();
@@ -72,6 +82,9 @@ public final class ModNetworking {
 			Component statusMessage;
 			if (!updated.isPowered()) {
 				statusMessage = Component.translatable("message.tlouradio.power_off").withStyle(ChatFormatting.RED);
+			} else if (!updated.antennaExtended()) {
+				statusMessage = Component.translatable("message.tlouradio.power_on_antenna_closed", updated.frequency())
+						.withStyle(ChatFormatting.GOLD);
 			} else if (updated.networkId().isPresent()
 					&& !RadioNetworkManager.isRadioStateAuthorized(player.level().getServer(), updated)) {
 				statusMessage = Component.translatable("message.tlouradio.power_on_no_signal", updated.frequency())
@@ -128,17 +141,8 @@ public final class ModNetworking {
 
 		ServerPlayNetworking.registerGlobalReceiver(UpdateHandheldRadioPayload.TYPE, (payload, context) -> {
 			ServerPlayer player = context.player();
-			if (!player.isAlive() || player.isSpectator() || player.hasDisconnected()) {
-				return;
-			}
-
-			InteractionHand hand = payload.hand();
-			if (hand == null) {
-				return;
-			}
-
-			ItemStack stack = player.getItemInHand(hand);
-			if (stack.isEmpty() || !(stack.getItem() instanceof HandheldRadioItem)) {
+			ItemStack stack = getValidatedHeldRadio(player, payload.hand());
+			if (stack == null) {
 				return;
 			}
 
@@ -161,14 +165,18 @@ public final class ModNetworking {
 					current.isPowered(),
 					frequency,
 					Optional.empty(),
-					passcode
+					passcode,
+					payload.antennaExtended()
 			);
 			stack.set(ModDataComponents.RADIO_STATE, updated);
 
 			RadioNetworkManager.syncPlayer(player);
 
 			Component statusMessage;
-			if (wasPaired) {
+			if (!updated.antennaExtended()) {
+				statusMessage = Component.translatable("message.tlouradio.handheld_updated_antenna_closed", frequency)
+						.withStyle(ChatFormatting.GOLD);
+			} else if (wasPaired) {
 				statusMessage = Component.translatable("message.tlouradio.handheld_updated_unpaired", frequency)
 						.withStyle(ChatFormatting.AQUA);
 			} else if (!passcode.isEmpty()) {
@@ -180,5 +188,77 @@ public final class ModNetworking {
 			}
 			player.sendOverlayMessage(statusMessage);
 		});
+
+		ServerPlayNetworking.registerGlobalReceiver(SetRadioAntennaPayload.TYPE, (payload, context) -> {
+			ServerPlayer player = context.player();
+			ItemStack stack = getValidatedHeldRadio(player, payload.hand());
+			if (stack == null) {
+				return;
+			}
+
+			RadioStateComponent current = stack.getOrDefault(
+					ModDataComponents.RADIO_STATE,
+					RadioStateComponent.DEFAULT
+			);
+			if (current.antennaExtended() == payload.antennaExtended()) {
+				return;
+			}
+
+			RadioStateComponent updated = current.withAntennaExtended(payload.antennaExtended());
+			stack.set(ModDataComponents.RADIO_STATE, updated);
+			RadioNetworkManager.syncPlayer(player);
+
+			Component msg = payload.antennaExtended()
+					? Component.translatable("message.tlouradio.antenna_extended").withStyle(ChatFormatting.GREEN)
+					: Component.translatable("message.tlouradio.antenna_retracted").withStyle(ChatFormatting.GOLD);
+			player.sendOverlayMessage(msg);
+		});
+
+		ServerPlayNetworking.registerGlobalReceiver(StepRadioDialPayload.TYPE, (payload, context) -> {
+			ServerPlayer player = context.player();
+			ItemStack stack = getValidatedHeldRadio(player, payload.hand());
+			if (stack == null) {
+				return;
+			}
+
+			String frequency = payload.frequency();
+			if (!RadioStateComponent.isValidFrequency(frequency)) {
+				return;
+			}
+
+			RadioStateComponent current = stack.getOrDefault(
+					ModDataComponents.RADIO_STATE,
+					RadioStateComponent.DEFAULT
+			);
+			boolean wasPaired = current.networkId().isPresent();
+			// If manually detuning away from a paired Base Box, clear pairing & do not carry over secret Base Box PIN
+			String effectivePasscode = wasPaired ? "" : current.passcode();
+
+			RadioStateComponent updated = new RadioStateComponent(
+					current.isPowered(),
+					frequency,
+					Optional.empty(),
+					effectivePasscode,
+					current.antennaExtended()
+			);
+			stack.set(ModDataComponents.RADIO_STATE, updated);
+			RadioNetworkManager.syncPlayer(player);
+
+			Component statusMessage = wasPaired
+					? Component.translatable("message.tlouradio.handheld_updated_unpaired", frequency).withStyle(ChatFormatting.AQUA)
+					: Component.translatable("message.tlouradio.dial_tuned", frequency).withStyle(ChatFormatting.GREEN);
+			player.sendOverlayMessage(statusMessage);
+		});
+	}
+
+	private static ItemStack getValidatedHeldRadio(ServerPlayer player, InteractionHand hand) {
+		if (player == null || hand == null || !player.isAlive() || player.isSpectator() || player.hasDisconnected()) {
+			return null;
+		}
+		ItemStack stack = player.getItemInHand(hand);
+		if (stack.isEmpty() || !(stack.getItem() instanceof HandheldRadioItem)) {
+			return null;
+		}
+		return stack;
 	}
 }

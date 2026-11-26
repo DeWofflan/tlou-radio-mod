@@ -1,6 +1,7 @@
 package com.tlouradio.block;
 
 import com.tlouradio.TlouRadioMod;
+import com.tlouradio.item.RadioBaseBoxBlockItem;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
@@ -18,6 +19,7 @@ public final class ModBlocks {
 			BlockBehaviour.Properties.of()
 					.strength(3.0F, 6.0F)
 					.sound(SoundType.METAL)
+					.noOcclusion()
 	);
 
 	private ModBlocks() {
@@ -33,7 +35,10 @@ public final class ModBlocks {
 		Registry.register(BuiltInRegistries.BLOCK, blockKey, block);
 
 		ResourceKey<Item> itemKey = ResourceKey.create(Registries.ITEM, TlouRadioMod.id(name));
-		BlockItem blockItem = new BlockItem(block, new Item.Properties().setId(itemKey).useBlockDescriptionPrefix());
+		BlockItem blockItem = new RadioBaseBoxBlockItem(
+				block,
+				new Item.Properties().setId(itemKey).useBlockDescriptionPrefix()
+		);
 		Registry.register(BuiltInRegistries.ITEM, itemKey, blockItem);
 
 		return block;

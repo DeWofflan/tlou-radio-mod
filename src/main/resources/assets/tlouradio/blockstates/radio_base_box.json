@@ -1,7 +1,19 @@
 {
 	"variants": {
-		"": {
+		"facing=north": {
 			"model": "tlouradio:block/radio_base_box"
+		},
+		"facing=east": {
+			"model": "tlouradio:block/radio_base_box",
+			"y": 90
+		},
+		"facing=south": {
+			"model": "tlouradio:block/radio_base_box",
+			"y": 180
+		},
+		"facing=west": {
+			"model": "tlouradio:block/radio_base_box",
+			"y": 270
 		}
 	}
 }

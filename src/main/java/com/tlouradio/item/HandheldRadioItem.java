@@ -1,5 +1,11 @@
 package com.tlouradio.item;
 
+import com.geckolib.animatable.GeoItem;
+import com.geckolib.animatable.instance.AnimatableInstanceCache;
+import com.geckolib.animatable.manager.AnimatableManager;
+import com.geckolib.animation.AnimationController;
+import com.geckolib.animation.RawAnimation;
+import com.geckolib.util.GeckoLibUtil;
 import com.tlouradio.block.RadioBaseBoxBlock;
 import com.tlouradio.component.ModDataComponents;
 import com.tlouradio.component.RadioStateComponent;
@@ -21,9 +27,39 @@ import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.function.Consumer;
 
-public class HandheldRadioItem extends Item {
+public class HandheldRadioItem extends Item implements GeoItem {
+	private static final RawAnimation IDLE_ANIM = RawAnimation.begin().thenLoop("idle");
+
+	private final AnimatableInstanceCache geoCache = GeckoLibUtil.createInstanceCache(this);
+	private volatile Object cachedRenderProvider;
+
 	public HandheldRadioItem(Properties properties) {
 		super(properties);
+	}
+
+	@Override
+	public boolean isPerspectiveAware() {
+		return true;
+	}
+
+	@Override
+	public Object getRenderProvider() {
+		Object provider = this.cachedRenderProvider;
+		if (provider == null) {
+			provider = RadioClientHooks.createHandheldRenderProvider();
+			this.cachedRenderProvider = provider;
+		}
+		return provider != null ? provider : GeoItem.super.getRenderProvider();
+	}
+
+	@Override
+	public void registerControllers(AnimatableManager.ControllerRegistrar controllers) {
+		controllers.add(new AnimationController<>("handheld_controller", 2, state -> state.setAndContinue(IDLE_ANIM)));
+	}
+
+	@Override
+	public AnimatableInstanceCache getAnimatableInstanceCache() {
+		return this.geoCache;
 	}
 
 	@Override
@@ -73,9 +109,13 @@ public class HandheldRadioItem extends Item {
 		Component statusText = state.isPowered()
 				? Component.translatable("tooltip.tlouradio.status_on").withStyle(ChatFormatting.GREEN)
 				: Component.translatable("tooltip.tlouradio.status_off").withStyle(ChatFormatting.RED);
+		Component antennaText = state.antennaExtended()
+				? Component.translatable("tooltip.tlouradio.antenna_open").withStyle(ChatFormatting.GREEN)
+				: Component.translatable("tooltip.tlouradio.antenna_closed").withStyle(ChatFormatting.GOLD);
 
 		tooltipAdder.accept(Component.translatable("tooltip.tlouradio.power", statusText).withStyle(ChatFormatting.GRAY));
 		tooltipAdder.accept(Component.translatable("tooltip.tlouradio.frequency", state.frequency()).withStyle(ChatFormatting.GRAY));
+		tooltipAdder.accept(Component.translatable("tooltip.tlouradio.antenna", antennaText).withStyle(ChatFormatting.GRAY));
 
 		if (state.networkId().isPresent()) {
 			String shortId = RadioStateComponent.shortNetworkId(state.networkId().get());

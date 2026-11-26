@@ -67,7 +67,7 @@ public final class RadioNetworkManager {
 	 * Open/free-frequency radios ({@code networkId.isEmpty()}) continue to operate freely.
 	 */
 	public static boolean isRadioStateAuthorized(MinecraftServer server, RadioStateComponent state) {
-		if (state == null || !state.isPowered()) {
+		if (state == null || !state.isPowered() || !state.antennaExtended()) {
 			return false;
 		}
 		if (state.networkId().isEmpty()) {
@@ -144,7 +144,11 @@ public final class RadioNetworkManager {
 		Optional<RadioChannelKey> heldChannel = findHeldPoweredRadioChannel(player);
 		if (heldChannel.isEmpty()) {
 			ACTIVE_TRANSMITTERS.remove(playerId);
-			if (holdsDisconnectedPairedPoweredRadio(player)) {
+			if (holdsRetractedAntennaPoweredRadio(player)) {
+				player.sendOverlayMessage(
+						Component.translatable("message.tlouradio.antenna_retracted_no_signal").withStyle(ChatFormatting.GOLD)
+				);
+			} else if (holdsDisconnectedPairedPoweredRadio(player)) {
 				player.sendOverlayMessage(
 						Component.translatable("message.tlouradio.connection_lost").withStyle(ChatFormatting.RED)
 				);
@@ -303,6 +307,19 @@ public final class RadioNetworkManager {
 		}
 		RadioStateComponent state = stack.getOrDefault(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT);
 		return isRadioStateAuthorized(server, state) ? Optional.of(state.toChannelKey()) : Optional.empty();
+	}
+
+	private static boolean holdsRetractedAntennaPoweredRadio(ServerPlayer player) {
+		return isRetractedAntennaPoweredRadio(player.getMainHandItem())
+				|| isRetractedAntennaPoweredRadio(player.getOffhandItem());
+	}
+
+	private static boolean isRetractedAntennaPoweredRadio(ItemStack stack) {
+		if (stack == null || stack.isEmpty() || !(stack.getItem() instanceof HandheldRadioItem)) {
+			return false;
+		}
+		RadioStateComponent state = stack.getOrDefault(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT);
+		return state.isPowered() && !state.antennaExtended();
 	}
 
 	private static boolean holdsDisconnectedPairedPoweredRadio(ServerPlayer player) {

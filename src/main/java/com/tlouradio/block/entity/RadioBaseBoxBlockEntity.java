@@ -1,5 +1,11 @@
 package com.tlouradio.block.entity;
 
+import com.geckolib.animatable.GeoBlockEntity;
+import com.geckolib.animatable.instance.AnimatableInstanceCache;
+import com.geckolib.animatable.manager.AnimatableManager;
+import com.geckolib.animation.AnimationController;
+import com.geckolib.animation.RawAnimation;
+import com.geckolib.util.GeckoLibUtil;
 import com.tlouradio.component.RadioStateComponent;
 import com.tlouradio.radio.RadioBaseNetworkSavedData;
 import com.tlouradio.radio.RadioNetworkManager;
@@ -15,10 +21,13 @@ import net.minecraft.world.level.storage.ValueOutput;
 import java.util.Objects;
 import java.util.UUID;
 
-public class RadioBaseBoxBlockEntity extends BlockEntity {
+public class RadioBaseBoxBlockEntity extends BlockEntity implements GeoBlockEntity {
 	private static final String TAG_NETWORK_ID = "network_id";
 	private static final String TAG_FREQUENCY = "frequency";
 	private static final String TAG_PASSCODE = "passcode";
+	private static final RawAnimation IDLE_ANIM = RawAnimation.begin().thenLoop("idle");
+
+	private final AnimatableInstanceCache geoCache = GeckoLibUtil.createInstanceCache(this);
 
 	private UUID networkId = UUID.randomUUID();
 	private String frequency = RadioStateComponent.DEFAULT_FREQUENCY;
@@ -26,6 +35,16 @@ public class RadioBaseBoxBlockEntity extends BlockEntity {
 
 	public RadioBaseBoxBlockEntity(BlockPos pos, BlockState blockState) {
 		super(ModBlockEntities.RADIO_BASE_BOX, pos, blockState);
+	}
+
+	@Override
+	public void registerControllers(AnimatableManager.ControllerRegistrar controllers) {
+		controllers.add(new AnimationController<>("base_box_controller", 4, state -> state.setAndContinue(IDLE_ANIM)));
+	}
+
+	@Override
+	public AnimatableInstanceCache getAnimatableInstanceCache() {
+		return this.geoCache;
 	}
 
 	public UUID getNetworkId() {

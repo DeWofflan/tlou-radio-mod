@@ -1,6 +1,42 @@
 {
-	"parent": "minecraft:item/generated",
 	"textures": {
-		"layer0": "tlouradio:item/handheld_radio"
+		"particle": "tlouradio:item/handheld_radio"
+	},
+	"display": {
+		"thirdperson_righthand": {
+			"rotation": [12, 180, 0],
+			"translation": [0, 2.5, 1.0],
+			"scale": [0.52, 0.52, 0.52]
+		},
+		"thirdperson_lefthand": {
+			"rotation": [12, 180, 0],
+			"translation": [0, 2.5, 1.0],
+			"scale": [0.52, 0.52, 0.52]
+		},
+		"firstperson_righthand": {
+			"rotation": [6, 166, -4],
+			"translation": [1.1, 1.8, -0.6],
+			"scale": [0.62, 0.62, 0.62]
+		},
+		"firstperson_lefthand": {
+			"rotation": [6, -166, 4],
+			"translation": [1.1, 1.8, -0.6],
+			"scale": [0.62, 0.62, 0.62]
+		},
+		"ground": {
+			"rotation": [90, 0, 15],
+			"translation": [0, -1.5, 0],
+			"scale": [0.48, 0.48, 0.48]
+		},
+		"gui": {
+			"rotation": [20, 155, -12],
+			"translation": [0.4, -1.2, 0],
+			"scale": [0.62, 0.62, 0.62]
+		},
+		"fixed": {
+			"rotation": [0, 0, 0],
+			"translation": [0, -0.8, -1.0],
+			"scale": [0.65, 0.65, 0.65]
+		}
 	}
 }

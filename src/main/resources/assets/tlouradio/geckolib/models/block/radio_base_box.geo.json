@@ -1,0 +1,125 @@
+{
+	"format_version": "1.12.0",
+	"minecraft:geometry": [
+		{
+			"description": {
+				"identifier": "geometry.tlouradio.radio_base_box",
+				"texture_width": 128,
+				"texture_height": 128,
+				"visible_bounds_width": 2,
+				"visible_bounds_height": 2,
+				"visible_bounds_offset": [0, 0.5, 0]
+			},
+			"bones": [
+				{
+					"name": "root",
+					"pivot": [0, 0, 0]
+				},
+				{
+					"name": "base_box",
+					"parent": "root",
+					"pivot": [0, 0, 0],
+					"cubes": [
+						{
+							"origin": [-7.0, -8.0, -5.5],
+							"size": [14.0, 9.5, 11.0],
+							"uv": {
+								"north": {"uv": [0, 0], "uv_size": [28, 19]},
+								"south": {"uv": [29, 0], "uv_size": [28, 19]},
+								"east": {"uv": [58, 0], "uv_size": [22, 19]},
+								"west": {"uv": [81, 0], "uv_size": [22, 19]},
+								"up": {"uv": [0, 20], "uv_size": [28, 22]},
+								"down": {"uv": [29, 20], "uv_size": [28, 22]}
+							}
+						},
+						{
+							"origin": [-7.3, -8.0, -5.8],
+							"size": [1.5, 9.8, 1.5],
+							"uv": [60, 22]
+						},
+						{
+							"origin": [5.8, -8.0, -5.8],
+							"size": [1.5, 9.8, 1.5],
+							"uv": [60, 22]
+						},
+						{
+							"origin": [-7.3, -8.0, 4.3],
+							"size": [1.5, 9.8, 1.5],
+							"uv": [60, 22]
+						},
+						{
+							"origin": [5.8, -8.0, 4.3],
+							"size": [1.5, 9.8, 1.5],
+							"uv": [60, 22]
+						},
+						{
+							"origin": [-4.5, 1.5, -1.0],
+							"size": [9.0, 1.2, 2.0],
+							"uv": [68, 22]
+						}
+					]
+				},
+				{
+					"name": "control_panel",
+					"parent": "base_box",
+					"pivot": [0, -3.0, -5.5],
+					"cubes": [
+						{
+							"origin": [-6.0, -7.0, -6.1],
+							"size": [12.0, 7.6, 0.7],
+							"uv": {
+								"north": {"uv": [0, 46], "uv_size": [48, 30]},
+								"south": {"uv": [0, 46], "uv_size": [48, 30]},
+								"east": {"uv": [49, 46], "uv_size": [3, 30]},
+								"west": {"uv": [49, 46], "uv_size": [3, 30]},
+								"up": {"uv": [0, 77], "uv_size": [48, 3]},
+								"down": {"uv": [0, 77], "uv_size": [48, 3]}
+							}
+						},
+						{
+							"origin": [2.2, -5.8, -6.7],
+							"size": [2.2, 2.2, 0.7],
+							"uv": {
+								"north": {"uv": [56, 46], "uv_size": [10, 10]},
+								"south": {"uv": [56, 46], "uv_size": [10, 10]},
+								"east": {"uv": [67, 46], "uv_size": [4, 10]},
+								"west": {"uv": [67, 46], "uv_size": [4, 10]},
+								"up": {"uv": [67, 57], "uv_size": [10, 4]},
+								"down": {"uv": [67, 57], "uv_size": [10, 4]}
+							}
+						},
+						{
+							"origin": [-1.2, -5.6, -6.55],
+							"size": [1.8, 1.8, 0.55],
+							"uv": {
+								"north": {"uv": [56, 58], "uv_size": [8, 8]},
+								"south": {"uv": [56, 58], "uv_size": [8, 8]},
+								"east": {"uv": [65, 58], "uv_size": [3, 8]},
+								"west": {"uv": [65, 58], "uv_size": [3, 8]},
+								"up": {"uv": [56, 58], "uv_size": [8, 3]},
+								"down": {"uv": [56, 58], "uv_size": [8, 3]}
+							}
+						}
+					]
+				},
+				{
+					"name": "antenna_main",
+					"parent": "base_box",
+					"pivot": [-5.2, 1.5, 3.6],
+					"cubes": [
+						{
+							"origin": [-6.2, 1.5, 2.6],
+							"size": [2.0, 2.2, 2.0],
+							"uv": [84, 46]
+						},
+						{
+							"origin": [-5.65, 3.7, 3.15],
+							"size": [0.9, 10.5, 0.9],
+							"uv": [94, 46]
+						}
+					]
+				}
+			]
+		}
+	]
+}

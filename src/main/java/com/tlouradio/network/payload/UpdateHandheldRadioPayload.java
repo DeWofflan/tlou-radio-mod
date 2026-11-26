@@ -10,6 +10,7 @@ import net.minecraft.world.InteractionHand;
 public record UpdateHandheldRadioPayload(
 		String frequency,
 		String passcode,
+		boolean antennaExtended,
 		InteractionHand hand
 ) implements CustomPacketPayload {
 	private static final int MAX_WIRE_STRING_LENGTH = 16;
@@ -20,6 +21,7 @@ public record UpdateHandheldRadioPayload(
 	public static final StreamCodec<RegistryFriendlyByteBuf, UpdateHandheldRadioPayload> STREAM_CODEC = StreamCodec.composite(
 			ByteBufCodecs.stringUtf8(MAX_WIRE_STRING_LENGTH), UpdateHandheldRadioPayload::frequency,
 			ByteBufCodecs.stringUtf8(MAX_WIRE_STRING_LENGTH), UpdateHandheldRadioPayload::passcode,
+			ByteBufCodecs.BOOL, UpdateHandheldRadioPayload::antennaExtended,
 			InteractionHand.STREAM_CODEC, UpdateHandheldRadioPayload::hand,
 			UpdateHandheldRadioPayload::new
 	);
