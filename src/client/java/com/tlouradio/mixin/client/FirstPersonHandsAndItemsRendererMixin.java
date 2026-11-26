@@ -3,8 +3,11 @@ package com.tlouradio.mixin.client;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import com.tlouradio.client.RadioClientInputHandler;
+import com.tlouradio.client.RadioClientState;
 import com.tlouradio.client.gui.HandheldRadioScreen;
 import com.tlouradio.client.gui.RadioBaseBoxScreen;
+import com.tlouradio.component.ModDataComponents;
+import com.tlouradio.component.RadioStateComponent;
 import com.tlouradio.item.HandheldRadioItem;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.FirstPersonHandsAndItemsRenderer;
@@ -132,6 +135,18 @@ public abstract class FirstPersonHandsAndItemsRendererMixin {
 		poseStack.rotateDegrees(Axis.YP, -armSign * 5.0F);
 		poseStack.rotateDegrees(Axis.ZP, armSign * 3.0F);
 		poseStack.rotateDegrees(Axis.XP, 7.0F);
+
+		// 3b. Subtle speaker micro-vibration when actively receiving incoming radio audio
+		RadioStateComponent radioState = stack.getOrDefault(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT);
+		float rxIntensity = (radioState.isPowered() && radioState.antennaExtended()) ? RadioClientState.getRxIntensity() : 0.0F;
+		if (rxIntensity > 0.01F) {
+			double tSec = (System.nanoTime() % 10_000_000_000L) / 1_000_000_000.0D;
+			float vibX = Mth.sin((float) (tSec * 72.0D)) * 0.0022F * rxIntensity;
+			float vibY = Mth.cos((float) (tSec * 96.0D)) * 0.0016F * rxIntensity;
+			float vibRoll = Mth.sin((float) (tSec * 84.0D)) * 0.30F * rxIntensity;
+			poseStack.translate(vibX, vibY, 0.0F);
+			poseStack.rotateDegrees(Axis.ZP, vibRoll);
+		}
 
 		// 4. Render player's hand/forearm algebraically centered on the radio's lower grip (wide 4px & slim 3px)
 		if (!avatarState.isInvisible) {

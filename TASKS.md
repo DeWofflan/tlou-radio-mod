@@ -28,6 +28,9 @@
 - [x] GeckoLib 1. şahıs animasyonlarının (`.animation.json` + bilek açılış salınımı, PTT ağıza yaklaşma, teleskopik anten yaylanması) ve 1. şahıs oyuncu kolu kavramasının (`FirstPersonHandsAndItemsRendererMixin`) bağlanması.
 - [x] `HandheldRadioScreen` üzerinde ±6° fare paralaksı, 3D fiziksel çökebilen tuşlar, sürüklenebilir teleskopik anten (`antennaExtended`), debounce destekli çevrilebilir `dial_knob` ve çakışma korumalı yan `ptt_button` etkileşimlerinin uygulanması.
 
-## Faz 5B: 3. Şahıs Animasyonu ve Ses Atmosferi [Model: Neon + Hydrogen]
-- [ ] 3. şahıs dürbün (`Spyglass`) kol kaldırma Mixin'inin yazılması ve ağ senkronizasyonu.
-- [ ] Telsiz ses filtresi (bandpass + hafif cızırtı) ve açılış/kapanış bip seslerinin eklenmesi.
+## Faz 5B: Çoklu Frekanslı Ana Kutu, 3. Şahıs Animasyonu, Opus DSP ve Ses Atmosferi [Model: Neon + Hydrogen]
+- [x] Çoklu frekanslı Ana Kutu (en fazla 8 kanal, geriye dönük NBT/SavedData uyumluluğu, O(1) frekans çakışma indeksi, otomatik boş frekans atama, kompakt kanal seçici 3D GUI), otomatik kutu eşleşmesi/şifre koruması ve kanal bazlı granüler sabotaj.
+- [x] 3. şahıs dürbün (`Spyglass`) kol kaldırma Mixin'inin (`AvatarRendererMixin`) yazılması ve `SyncRadioTransmitterPayload` S2C ağ senkronizasyonu.
+- [x] Sunucu taraflı Opus DSP telsiz ses filtresi (`RadioAudioDspProcessor`: 300–3000 Hz bandpass + hafif cızırtı, güvenli ham ses fallback'i, konuşmacı bazlı önbellek/temizlik).
+- [x] Rate-limited `RadioReceivingSignalPayload` (150 ms) ile gelen seste mikro-titreşim ve LED/LCD RX nabız parlaması.
+- [x] `ModSounds` + `sounds.json` (`radio_power_on`, `radio_power_off`, `radio_ptt_start`, `radio_ptt_end`, `radio_sabotage`) ve `tr_tr.json` / `en_us.json` yerelleştirmeleri.

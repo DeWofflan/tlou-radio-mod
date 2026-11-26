@@ -2,6 +2,7 @@ package com.tlouradio.client.gui;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import com.tlouradio.client.RadioClientInputHandler;
+import com.tlouradio.client.RadioClientState;
 import com.tlouradio.client.gui.render.HandheldRadioModelRenderer;
 import com.tlouradio.client.renderer.HandheldRadioGeoItemRenderer;
 import com.tlouradio.component.ModDataComponents;
@@ -703,11 +704,24 @@ public class HandheldRadioScreen extends Screen {
 	}
 
 	private HandheldRadioModelRenderer.LcdContent buildLcdContent(boolean transmitting) {
-		String pwrStr = transmitting
-				? Component.translatable("gui.tlouradio.handheld.lcd_tx").getString()
-				: Component.translatable(
-						this.isPowered ? "gui.tlouradio.handheld.lcd_power_on" : "gui.tlouradio.handheld.lcd_power_off"
-				).getString();
+		float rxIntensity = (this.isPowered && this.antennaExtended && !transmitting)
+				? RadioClientState.getRxIntensity()
+				: 0.0F;
+		boolean receiving = rxIntensity > 0.05F;
+		float rxPulse = receiving
+				? (0.5F + 0.5F * Mth.sin((System.currentTimeMillis() % 1000L) / 1000.0F * Mth.TWO_PI * 3.0F))
+				: 0.0F;
+
+		String pwrStr;
+		if (transmitting) {
+			pwrStr = Component.translatable("gui.tlouradio.handheld.lcd_tx").getString();
+		} else if (receiving) {
+			pwrStr = Component.translatable("gui.tlouradio.handheld.lcd_rx").getString();
+		} else {
+			pwrStr = Component.translatable(
+					this.isPowered ? "gui.tlouradio.handheld.lcd_power_on" : "gui.tlouradio.handheld.lcd_power_off"
+			).getString();
+		}
 
 		String rightStatus;
 		int rightColor;
@@ -719,18 +733,23 @@ public class HandheldRadioScreen extends Screen {
 					"gui.tlouradio.handheld.lcd_net_paired",
 					RadioStateComponent.shortNetworkId(this.activeNetworkId.get()).substring(0, 4)
 			).getString();
-			rightColor = this.isPowered ? 0xFF74C488 : 0xFF556359;
+			rightColor = receiving ? (rxPulse > 0.5F ? 0xFF7CFFE0 : 0xFF4ADCB8) : (this.isPowered ? 0xFF74C488 : 0xFF556359);
 		} else {
 			rightStatus = Component.translatable("gui.tlouradio.handheld.lcd_net_open").getString();
-			rightColor = this.isPowered ? 0xFF74C488 : 0xFF556359;
+			rightColor = receiving ? (rxPulse > 0.5F ? 0xFF7CFFE0 : 0xFF4ADCB8) : (this.isPowered ? 0xFF74C488 : 0xFF556359);
 		}
 
 		int primaryInk = !this.isPowered
 				? 0xFF6B7D70
-				: (!this.antennaExtended ? 0xFFE8B974 : 0xFF9BF0AE);
-		int pwrInk = transmitting
-				? 0xFFFFAE42
-				: (this.isPowered ? 0xFF66EE88 : 0xFFC85A5A);
+				: (!this.antennaExtended ? 0xFFE8B974 : (receiving && rxPulse > 0.5F ? 0xFFB8FFF0 : 0xFF9BF0AE));
+		int pwrInk;
+		if (transmitting) {
+			pwrInk = 0xFFFFAE42;
+		} else if (receiving) {
+			pwrInk = rxPulse > 0.5F ? 0xFF88FFE4 : 0xFF3EE0B8;
+		} else {
+			pwrInk = this.isPowered ? 0xFF66EE88 : 0xFFC85A5A;
+		}
 
 		boolean blinkCursor = (System.currentTimeMillis() / 450L) % 2L == 0L;
 		String cursor = blinkCursor ? "_" : "";

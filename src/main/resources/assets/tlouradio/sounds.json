@@ -1,0 +1,57 @@
+{
+	"radio_power_on": {
+		"subtitle": "subtitles.tlouradio.radio_power_on",
+		"sounds": [
+			{
+				"name": "minecraft:block.lever.click",
+				"type": "event",
+				"pitch": 1.6,
+				"volume": 0.45
+			}
+		]
+	},
+	"radio_power_off": {
+		"subtitle": "subtitles.tlouradio.radio_power_off",
+		"sounds": [
+			{
+				"name": "minecraft:block.lever.click",
+				"type": "event",
+				"pitch": 0.85,
+				"volume": 0.45
+			}
+		]
+	},
+	"radio_ptt_start": {
+		"subtitle": "subtitles.tlouradio.radio_ptt_start",
+		"sounds": [
+			{
+				"name": "minecraft:block.note_block.bit",
+				"type": "event",
+				"pitch": 1.85,
+				"volume": 0.35
+			}
+		]
+	},
+	"radio_ptt_end": {
+		"subtitle": "subtitles.tlouradio.radio_ptt_end",
+		"sounds": [
+			{
+				"name": "minecraft:block.note_block.bit",
+				"type": "event",
+				"pitch": 1.15,
+				"volume": 0.30
+			}
+		]
+	},
+	"radio_sabotage": {
+		"subtitle": "subtitles.tlouradio.radio_sabotage",
+		"sounds": [
+			{
+				"name": "minecraft:block.beacon.deactivate",
+				"type": "event",
+				"pitch": 1.75,
+				"volume": 0.45
+			}
+		]
+	}
+}

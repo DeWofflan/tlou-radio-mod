@@ -3,6 +3,7 @@
 	"package": "com.tlouradio.mixin.client",
 	"compatibilityLevel": "JAVA_25",
 	"client": [
+		"AvatarRendererMixin",
 		"CameraMixin",
 		"FirstPersonHandsAndItemsMixin",
 		"FirstPersonHandsAndItemsRendererMixin",

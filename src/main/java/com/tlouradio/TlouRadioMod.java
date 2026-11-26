@@ -7,6 +7,7 @@ import com.tlouradio.item.HandheldRadioItem;
 import com.tlouradio.item.ModItems;
 import com.tlouradio.network.ModNetworking;
 import com.tlouradio.radio.RadioNetworkManager;
+import com.tlouradio.sound.ModSounds;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.player.AttackBlockCallback;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
@@ -23,6 +24,7 @@ public class TlouRadioMod implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		ModDataComponents.initialize();
+		ModSounds.initialize();
 		ModBlocks.initialize();
 		ModBlockEntities.initialize();
 		ModItems.initialize();

@@ -52,17 +52,17 @@ public final class BaseBoxModelRenderer {
 
 	public static StationLayout computeLayout(int screenWidth, int screenHeight) {
 		int centerX = screenWidth / 2;
-		int modelFloorY = Mth.clamp(screenHeight / 2 - 8, 114, Math.max(114, screenHeight - 124));
+		int deckWidth = 186;
+		int deckHeight = 136;
+		int modelFloorY = Mth.clamp(screenHeight / 2 - 22, 108, Math.max(108, screenHeight - deckHeight - 24));
 
 		int pipX0 = centerX - PIP_HALF_WIDTH_PX;
 		int pipX1 = centerX + PIP_HALF_WIDTH_PX;
 		int pipY0 = modelFloorY - PIP_TOP_EXTENT_PX;
 		int pipY1 = modelFloorY + PIP_BOTTOM_EXTENT_PX;
 
-		int deckWidth = 166;
-		int deckHeight = 96;
 		int deckX = centerX - (deckWidth / 2);
-		int deckY = modelFloorY + 8;
+		int deckY = modelFloorY + 6;
 
 		return new StationLayout(centerX, modelFloorY, pipX0, pipY0, pipX1, pipY1, deckX, deckY, deckWidth, deckHeight);
 	}

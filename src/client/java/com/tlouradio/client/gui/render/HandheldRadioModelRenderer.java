@@ -8,6 +8,7 @@ import com.mojang.blaze3d.platform.Lighting;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import com.tlouradio.TlouRadioMod;
+import com.tlouradio.client.RadioClientState;
 import com.tlouradio.item.HandheldRadioItem;
 import com.tlouradio.item.ModItems;
 import net.fabricmc.fabric.api.client.rendering.v1.PictureInPictureRendererRegistry;
@@ -185,6 +186,10 @@ public final class HandheldRadioModelRenderer {
 		float qFocus = Math.round(Mth.clamp(focusProgress, 0.0F, 1.0F) * 100.0F) / 100.0F;
 		float swayPhase = isTransmitting ? ((System.currentTimeMillis() % 4000L) / 1000.0F) : 0.0F;
 		float qSway = Math.round(swayPhase * 20.0F) / 20.0F;
+		float rxIntensity = (isPowered && qAntExt > 0.5F) ? RadioClientState.getRxIntensity() : 0.0F;
+		float qRx = Math.round(rxIntensity * 20.0F) / 20.0F;
+		float rxPhase = qRx > 0.01F ? ((System.currentTimeMillis() % 1000L) / 1000.0F) : 0.0F;
+		float qRxPhase = Math.round(rxPhase * 30.0F) / 30.0F;
 
 		String depressedBone = qKeyDepth > 0.01F ? mapKeyIdToBoneName(animationState.depressedKeyId()) : "";
 
@@ -199,6 +204,8 @@ public final class HandheldRadioModelRenderer {
 				handSideSign,
 				qFocus,
 				qSway,
+				qRx,
+				qRxPhase,
 				lcdContent,
 				layout.pipX0(),
 				layout.pipY0(),
@@ -363,6 +370,8 @@ public final class HandheldRadioModelRenderer {
 			float handSideSign,
 			float focusProgress,
 			float swayPhase,
+			float rxIntensity,
+			float rxPhase,
 			LcdContent lcdContent,
 			int x0,
 			int y0,
@@ -432,8 +441,25 @@ public final class HandheldRadioModelRenderer {
 			poseStack.rotateDegrees(Axis.XP, ISOMETRIC_PITCH_DEG + (6.0F * invFocus));
 			poseStack.rotateDegrees(Axis.YP, ISOMETRIC_YAW_DEG);
 
+			if (state.rxIntensity() > 0.01F) {
+				float phaseRad = state.rxPhase() * Mth.TWO_PI * 10.0F;
+				float vibX = Mth.sin(phaseRad) * 0.0024F * state.rxIntensity();
+				float vibY = Mth.cos(phaseRad * 1.3F) * 0.0018F * state.rxIntensity();
+				poseStack.translate(vibX, vibY, 0.0F);
+				poseStack.rotateDegrees(Axis.ZP, Mth.sin(phaseRad * 1.15F) * 0.28F * state.rxIntensity());
+			}
+
 			RenderPassInfo.BoneUpdater<GeoRenderState> boneUpdater = (renderPassInfo, snapshots) -> {
-				snapshots.ifPresent("led_on", bone -> bone.skipRender(!state.isPowered()));
+				snapshots.ifPresent("led_on", bone -> {
+					bone.skipRender(!state.isPowered());
+					if (state.isPowered() && state.rxIntensity() > 0.01F) {
+						float pulse = 0.5F + 0.5F * Mth.sin(state.rxPhase() * Mth.TWO_PI * 3.0F);
+						float s = 1.0F + 0.25F * pulse * state.rxIntensity();
+						bone.setScaleX(s);
+						bone.setScaleY(s);
+						bone.setScaleZ(s);
+					}
+				});
 				snapshots.ifPresent("led_off", bone -> bone.skipRender(state.isPowered()));
 
 				snapshots.ifPresent("dial_knob", bone ->

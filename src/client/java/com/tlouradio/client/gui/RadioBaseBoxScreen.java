@@ -6,6 +6,8 @@ import com.tlouradio.client.gui.render.HandheldRadioModelRenderer;
 import com.tlouradio.client.renderer.HandheldRadioGeoItemRenderer;
 import com.tlouradio.component.RadioStateComponent;
 import com.tlouradio.network.payload.UpdateBaseBoxConfigPayload;
+import com.tlouradio.radio.RadioBaseChannel;
+import com.tlouradio.radio.RadioBaseNetworkSavedData;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -19,15 +21,19 @@ import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.core.BlockPos;
-import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.util.Mth;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
- * 3D Field Station inspection & configuration screen for {@code RadioBaseBoxBlock}.
+ * 3D Field Station inspection & multi-channel configuration screen for {@code RadioBaseBoxBlock}.
+ * Supports up to 8 (frequency, passcode) channels per Base Box.
  */
 public class RadioBaseBoxScreen extends Screen {
 	private static final double DIAL_PIXELS_PER_DETENT = 10.0D;
@@ -38,6 +44,9 @@ public class RadioBaseBoxScreen extends Screen {
 	}
 
 	private enum DeckRole {
+		CHANNEL_SLOT,
+		CHANNEL_ADD,
+		CHANNEL_REMOVE,
 		DIGIT,
 		MODE,
 		DELETE,
@@ -45,15 +54,26 @@ public class RadioBaseBoxScreen extends Screen {
 		CANCEL
 	}
 
+	private static final class EditableChannel {
+		String frequency;
+		String passcode;
+		boolean hadInitialPasscode;
+		boolean passcodeModified;
+
+		EditableChannel(String frequency, String passcode, boolean hadInitialPasscode) {
+			this.frequency = frequency;
+			this.passcode = passcode != null ? passcode : "";
+			this.hadInitialPasscode = hadInitialPasscode;
+			this.passcodeModified = !hadInitialPasscode;
+		}
+	}
+
 	private final BlockPos blockPos;
 	private final UUID networkId;
-	private final boolean hadInitialPasscode;
-	private final String initialPasscode;
+	private final List<EditableChannel> channels = new ArrayList<>();
+	private int selectedChannelIndex;
 
 	private InputMode inputMode = InputMode.FREQUENCY;
-	private String frequencyBuffer;
-	private String passcodeBuffer = "";
-	private boolean passcodeModified = false;
 	private int invalidFlashTicks = 0;
 
 	private boolean draggingMainDial = false;
@@ -67,17 +87,37 @@ public class RadioBaseBoxScreen extends Screen {
 	private final RadioInspectionTransition transition = new RadioInspectionTransition();
 	private BaseBoxModelRenderer.StationLayout layout;
 
-	public RadioBaseBoxScreen(BlockPos blockPos, UUID networkId, String initialFrequency, String initialPasscode) {
+	public RadioBaseBoxScreen(
+			BlockPos blockPos,
+			UUID networkId,
+			List<RadioBaseChannel> initialChannels,
+			int initialSelectedIndex
+	) {
 		super(Component.translatable("gui.tlouradio.base_box.title"));
 		this.blockPos = blockPos;
 		this.networkId = networkId;
-		this.frequencyBuffer = initialFrequency;
-		this.initialPasscode = initialPasscode != null ? initialPasscode : "";
-		this.hadInitialPasscode = !this.initialPasscode.isEmpty();
 
-		float initDeg = HandheldRadioGeoItemRenderer.computeDialAngleRad(initialFrequency) * Mth.RAD_TO_DEG;
+		if (initialChannels != null && !initialChannels.isEmpty()) {
+			for (RadioBaseChannel ch : initialChannels) {
+				if (this.channels.size() >= RadioBaseNetworkSavedData.MAX_CHANNELS_PER_BOX) {
+					break;
+				}
+				String pass = ch.passcode() != null ? ch.passcode() : "";
+				this.channels.add(new EditableChannel(ch.frequency(), pass, !pass.isEmpty()));
+			}
+		}
+		if (this.channels.isEmpty()) {
+			this.channels.add(new EditableChannel(RadioStateComponent.DEFAULT_FREQUENCY, "", false));
+		}
+		this.selectedChannelIndex = Mth.clamp(initialSelectedIndex, 0, this.channels.size() - 1);
+
+		float initDeg = HandheldRadioGeoItemRenderer.computeDialAngleRad(currentChannel().frequency) * Mth.RAD_TO_DEG;
 		this.dialAngleDeg = initDeg;
 		this.targetDialAngleDeg = initDeg;
+	}
+
+	private EditableChannel currentChannel() {
+		return this.channels.get(this.selectedChannelIndex);
 	}
 
 	@Override
@@ -89,12 +129,63 @@ public class RadioBaseBoxScreen extends Screen {
 	private void buildTacticalControlDeck(BaseBoxModelRenderer.StationLayout d) {
 		int padX = d.deckX() + 6;
 		int padY = d.deckY() + 6;
+		int innerW = d.deckWidth() - 12;
 
-		int keyW = 24;
-		int funcW = 48;
-		int rowH = 19;
+		// Row A: Compact channel selector slots 1..8
+		int slotGap = 2;
+		int slotW = (innerW - (slotGap * 7)) / 8;
+		int slotH = 15;
+		for (int i = 0; i < RadioBaseNetworkSavedData.MAX_CHANNELS_PER_BOX; i++) {
+			final int slotIdx = i;
+			int sx = padX + i * (slotW + slotGap);
+			addDeckKey(
+					"CH_" + slotIdx,
+					Component.literal(String.valueOf(slotIdx + 1)),
+					sx,
+					padY,
+					slotW,
+					slotH,
+					DeckRole.CHANNEL_SLOT,
+					slotIdx,
+					() -> selectChannel(slotIdx)
+			);
+		}
+
+		// Row B: + Kanal Ekle | Sil
+		int actionY = padY + slotH + 3;
+		int actionH = 15;
+		int addW = (innerW - 3) * 2 / 3;
+		int remW = innerW - 3 - addW;
+		addDeckKey(
+				"CH_ADD",
+				Component.translatable("gui.tlouradio.base_box.channel_add"),
+				padX,
+				actionY,
+				addW,
+				actionH,
+				DeckRole.CHANNEL_ADD,
+				-1,
+				this::addChannel
+		);
+		addDeckKey(
+				"CH_REM",
+				Component.translatable("gui.tlouradio.base_box.channel_remove"),
+				padX + addW + 3,
+				actionY,
+				remW,
+				actionH,
+				DeckRole.CHANNEL_REMOVE,
+				-1,
+				this::removeSelectedChannel
+		);
+
+		// Keypad rows below channel bar
+		int keypadTopY = actionY + actionH + 5;
 		int gapX = 3;
 		int gapY = 3;
+		int keyW = 28;
+		int funcW = innerW - (keyW * 4 + gapX * 4);
+		int rowH = 19;
 
 		int c0 = padX;
 		int c1 = c0 + keyW + gapX;
@@ -102,30 +193,29 @@ public class RadioBaseBoxScreen extends Screen {
 		int c3 = c2 + keyW + gapX;
 		int c4 = c3 + keyW + gapX;
 
-		int r0 = padY;
+		int r0 = keypadTopY;
 		int r1 = r0 + rowH + gapY;
 		int r2 = r1 + rowH + gapY;
 		int r3 = r2 + rowH + gapY;
 
-		// Compact military field-console keypad (4x3 + right function bank)
-		addDeckKey("1", Component.literal("1"), c0, r0, keyW, rowH, DeckRole.DIGIT, () -> handleDigit('1'));
-		addDeckKey("2", Component.literal("2"), c1, r0, keyW, rowH, DeckRole.DIGIT, () -> handleDigit('2'));
-		addDeckKey("3", Component.literal("3"), c2, r0, keyW, rowH, DeckRole.DIGIT, () -> handleDigit('3'));
-		addDeckKey("4", Component.literal("4"), c3, r0, keyW, rowH, DeckRole.DIGIT, () -> handleDigit('4'));
-		addDeckKey("MODE", Component.translatable("gui.tlouradio.handheld.key_mode"), c4, r0, funcW, rowH, DeckRole.MODE, this::toggleInputMode);
+		addDeckKey("1", Component.literal("1"), c0, r0, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('1'));
+		addDeckKey("2", Component.literal("2"), c1, r0, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('2'));
+		addDeckKey("3", Component.literal("3"), c2, r0, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('3'));
+		addDeckKey("4", Component.literal("4"), c3, r0, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('4'));
+		addDeckKey("MODE", Component.translatable("gui.tlouradio.handheld.key_mode"), c4, r0, funcW, rowH, DeckRole.MODE, -1, this::toggleInputMode);
 
-		addDeckKey("5", Component.literal("5"), c0, r1, keyW, rowH, DeckRole.DIGIT, () -> handleDigit('5'));
-		addDeckKey("6", Component.literal("6"), c1, r1, keyW, rowH, DeckRole.DIGIT, () -> handleDigit('6'));
-		addDeckKey("7", Component.literal("7"), c2, r1, keyW, rowH, DeckRole.DIGIT, () -> handleDigit('7'));
-		addDeckKey("8", Component.literal("8"), c3, r1, keyW, rowH, DeckRole.DIGIT, () -> handleDigit('8'));
-		addDeckKey("DEL", Component.translatable("gui.tlouradio.handheld.key_delete"), c4, r1, funcW, rowH, DeckRole.DELETE, this::handleDelete);
+		addDeckKey("5", Component.literal("5"), c0, r1, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('5'));
+		addDeckKey("6", Component.literal("6"), c1, r1, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('6'));
+		addDeckKey("7", Component.literal("7"), c2, r1, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('7'));
+		addDeckKey("8", Component.literal("8"), c3, r1, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('8'));
+		addDeckKey("DEL", Component.translatable("gui.tlouradio.handheld.key_delete"), c4, r1, funcW, rowH, DeckRole.DELETE, -1, this::handleDelete);
 
-		addDeckKey("9", Component.literal("9"), c0, r2, keyW, rowH, DeckRole.DIGIT, () -> handleDigit('9'));
-		addDeckKey("0", Component.literal("0"), c1, r2, keyW * 2 + gapX, rowH, DeckRole.DIGIT, () -> handleDigit('0'));
-		addDeckKey(".", Component.literal("."), c3, r2, keyW, rowH, DeckRole.DIGIT, this::handleDot);
-		addDeckKey("SAVE", Component.translatable("gui.tlouradio.base_box.save"), c4, r2, funcW, rowH, DeckRole.SAVE, this::submitAndClose);
+		addDeckKey("9", Component.literal("9"), c0, r2, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('9'));
+		addDeckKey("0", Component.literal("0"), c1, r2, keyW * 2 + gapX, rowH, DeckRole.DIGIT, -1, () -> handleDigit('0'));
+		addDeckKey(".", Component.literal("."), c3, r2, keyW, rowH, DeckRole.DIGIT, -1, this::handleDot);
+		addDeckKey("SAVE", Component.translatable("gui.tlouradio.base_box.save"), c4, r2, funcW, rowH, DeckRole.SAVE, -1, this::submitAndClose);
 
-		addDeckKey("ESC", Component.translatable("gui.tlouradio.base_box.cancel"), c0, r3, d.deckWidth() - 12, 17, DeckRole.CANCEL, this::initiateSmoothClose);
+		addDeckKey("ESC", Component.translatable("gui.tlouradio.base_box.cancel"), c0, r3, innerW, 17, DeckRole.CANCEL, -1, this::initiateSmoothClose);
 	}
 
 	private void addDeckKey(
@@ -136,9 +226,64 @@ public class RadioBaseBoxScreen extends Screen {
 			int w,
 			int h,
 			DeckRole role,
+			int slotIndex,
 			Runnable action
 	) {
-		addRenderableWidget(new TacticalDeckButton(keyId, x, y, w, h, label, role, action));
+		addRenderableWidget(new TacticalDeckButton(keyId, x, y, w, h, label, role, slotIndex, action));
+	}
+
+	private void selectChannel(int index) {
+		if (index < 0 || index >= this.channels.size()) {
+			rejectKey("CH_" + index);
+			return;
+		}
+		if (index == this.selectedChannelIndex) {
+			return;
+		}
+		this.selectedChannelIndex = index;
+		this.inputMode = InputMode.FREQUENCY;
+		this.targetDialAngleDeg = HandheldRadioGeoItemRenderer.computeDialAngleRad(currentChannel().frequency) * Mth.RAD_TO_DEG;
+		triggerDeckKeyAnim("CH_" + index, 0.0F);
+		playTactileBeep(1.30F + index * 0.05F, 0.28F);
+	}
+
+	private void addChannel() {
+		if (this.channels.size() >= RadioBaseNetworkSavedData.MAX_CHANNELS_PER_BOX) {
+			rejectKey("CH_ADD");
+			return;
+		}
+		Set<String> used = new HashSet<>();
+		for (EditableChannel ch : this.channels) {
+			used.add(RadioStateComponent.normalizeFrequency(ch.frequency));
+		}
+		String candidate = RadioStateComponent.isValidFrequency(currentChannel().frequency)
+				? RadioStateComponent.normalizeFrequency(currentChannel().frequency)
+				: RadioStateComponent.DEFAULT_FREQUENCY;
+		for (int i = 0; i < 999; i++) {
+			candidate = RadioStateComponent.stepFrequencyTenths(candidate, 10);
+			if (!used.contains(candidate)) {
+				break;
+			}
+		}
+		this.channels.add(new EditableChannel(candidate, "", false));
+		this.selectedChannelIndex = this.channels.size() - 1;
+		this.inputMode = InputMode.FREQUENCY;
+		this.targetDialAngleDeg = HandheldRadioGeoItemRenderer.computeDialAngleRad(candidate) * Mth.RAD_TO_DEG;
+		triggerDeckKeyAnim("CH_ADD", 12.0F);
+		playTactileBeep(1.66F, 0.34F);
+	}
+
+	private void removeSelectedChannel() {
+		if (this.channels.size() <= 1) {
+			rejectKey("CH_REM");
+			return;
+		}
+		this.channels.remove(this.selectedChannelIndex);
+		this.selectedChannelIndex = Mth.clamp(this.selectedChannelIndex, 0, this.channels.size() - 1);
+		this.inputMode = InputMode.FREQUENCY;
+		this.targetDialAngleDeg = HandheldRadioGeoItemRenderer.computeDialAngleRad(currentChannel().frequency) * Mth.RAD_TO_DEG;
+		triggerDeckKeyAnim("CH_REM", -12.0F);
+		playTactileBeep(0.84F, 0.34F);
 	}
 
 	@Override
@@ -241,73 +386,76 @@ public class RadioBaseBoxScreen extends Screen {
 	}
 
 	private void stepFrequencyByDial(int deltaTenths, int detents) {
-		String base = RadioStateComponent.isValidFrequency(this.frequencyBuffer)
-				? this.frequencyBuffer
+		EditableChannel ch = currentChannel();
+		String base = RadioStateComponent.isValidFrequency(ch.frequency)
+				? ch.frequency
 				: RadioStateComponent.DEFAULT_FREQUENCY;
-		String next = RadioStateComponent.stepFrequencyTenths(base, deltaTenths);
-		this.frequencyBuffer = next;
+		ch.frequency = RadioStateComponent.stepFrequencyTenths(base, deltaTenths);
 		this.inputMode = InputMode.FREQUENCY;
 		this.targetDialAngleDeg = Mth.wrapDegrees(this.targetDialAngleDeg + detents * 18.0F);
 		playMechanicalClick(deltaTenths > 0 ? 1.60F : 1.36F, 0.28F);
 	}
 
 	private void handleDigit(char digit) {
+		EditableChannel ch = currentChannel();
 		String keyId = String.valueOf(digit);
 		float pitch = 1.12F + ((digit - '0') * 0.048F);
 
 		if (this.inputMode == InputMode.FREQUENCY) {
-			if (this.frequencyBuffer.length() >= RadioStateComponent.MAX_FREQUENCY_LENGTH) {
+			if (ch.frequency.length() >= RadioStateComponent.MAX_FREQUENCY_LENGTH) {
 				rejectKey(keyId);
 				return;
 			}
-			this.frequencyBuffer += digit;
+			ch.frequency += digit;
 			triggerDeckKeyAnim(keyId, 12.0F);
 			playTactileBeep(pitch, 0.34F);
 		} else {
-			if (!this.passcodeModified) {
-				this.passcodeModified = true;
-				this.passcodeBuffer = keyId;
+			if (!ch.passcodeModified) {
+				ch.passcodeModified = true;
+				ch.passcode = keyId;
 				triggerDeckKeyAnim(keyId, 12.0F);
 				playTactileBeep(pitch, 0.34F);
 				return;
 			}
-			if (this.passcodeBuffer.length() >= RadioStateComponent.MAX_PASSCODE_LENGTH) {
+			if (ch.passcode.length() >= RadioStateComponent.MAX_PASSCODE_LENGTH) {
 				rejectKey(keyId);
 				return;
 			}
-			this.passcodeBuffer += digit;
+			ch.passcode += digit;
 			triggerDeckKeyAnim(keyId, 12.0F);
 			playTactileBeep(pitch, 0.34F);
 		}
 	}
 
 	private void handleDot() {
+		EditableChannel ch = currentChannel();
 		if (this.inputMode != InputMode.FREQUENCY
-				|| this.frequencyBuffer.isEmpty()
-				|| this.frequencyBuffer.indexOf('.') >= 0
-				|| this.frequencyBuffer.length() >= RadioStateComponent.MAX_FREQUENCY_LENGTH) {
+				|| ch.frequency.isEmpty()
+				|| ch.frequency.indexOf('.') >= 0
+				|| ch.frequency.length() >= RadioStateComponent.MAX_FREQUENCY_LENGTH) {
 			rejectKey(".");
 			return;
 		}
-		this.frequencyBuffer += '.';
+		ch.frequency += '.';
 		triggerDeckKeyAnim(".", 10.0F);
 		playTactileBeep(1.62F, 0.32F);
 	}
 
 	private void handleDelete() {
+		EditableChannel ch = currentChannel();
 		if (this.inputMode == InputMode.FREQUENCY) {
-			if (this.frequencyBuffer.isEmpty()) {
+			if (ch.frequency.isEmpty()) {
 				rejectKey("DEL");
 				return;
 			}
-			this.frequencyBuffer = this.frequencyBuffer.substring(0, this.frequencyBuffer.length() - 1);
+			ch.frequency = ch.frequency.substring(0, ch.frequency.length() - 1);
 			triggerDeckKeyAnim("DEL", -12.0F);
 			playTactileBeep(0.88F, 0.34F);
 		} else {
-			if (!this.passcodeModified) {
-				if (this.hadInitialPasscode) {
-					this.passcodeModified = true;
-					this.passcodeBuffer = "";
+			if (!ch.passcodeModified) {
+				if (ch.hadInitialPasscode) {
+					ch.passcodeModified = true;
+					ch.passcode = "";
 					triggerDeckKeyAnim("DEL", -12.0F);
 					playTactileBeep(0.88F, 0.34F);
 				} else {
@@ -315,11 +463,11 @@ public class RadioBaseBoxScreen extends Screen {
 				}
 				return;
 			}
-			if (this.passcodeBuffer.isEmpty()) {
+			if (ch.passcode.isEmpty()) {
 				rejectKey("DEL");
 				return;
 			}
-			this.passcodeBuffer = this.passcodeBuffer.substring(0, this.passcodeBuffer.length() - 1);
+			ch.passcode = ch.passcode.substring(0, ch.passcode.length() - 1);
 			triggerDeckKeyAnim("DEL", -12.0F);
 			playTactileBeep(0.88F, 0.34F);
 		}
@@ -332,17 +480,35 @@ public class RadioBaseBoxScreen extends Screen {
 	}
 
 	private void submitAndClose() {
-		String finalFreq = this.frequencyBuffer;
-		String finalPass = this.passcodeModified ? this.passcodeBuffer : this.initialPasscode;
-		if (!RadioStateComponent.isValidFrequency(finalFreq) || !RadioStateComponent.isValidPasscode(finalPass)) {
-			this.invalidFlashTicks = 12;
-			rejectKey("SAVE");
-			return;
+		List<RadioBaseChannel> payloadChannels = new ArrayList<>(this.channels.size());
+		Set<String> seenNormalized = new HashSet<>();
+
+		for (int i = 0; i < this.channels.size(); i++) {
+			EditableChannel ch = this.channels.get(i);
+			if (!RadioStateComponent.isValidFrequency(ch.frequency) || !RadioStateComponent.isValidPasscode(ch.passcode)) {
+				this.selectedChannelIndex = i;
+				this.invalidFlashTicks = 14;
+				rejectKey("SAVE");
+				return;
+			}
+			String norm = RadioStateComponent.normalizeFrequency(ch.frequency);
+			if (!seenNormalized.add(norm)) {
+				this.selectedChannelIndex = i;
+				this.invalidFlashTicks = 14;
+				rejectKey("SAVE");
+				return;
+			}
+			payloadChannels.add(new RadioBaseChannel(norm, ch.passcode));
 		}
+
 		triggerDeckKeyAnim("SAVE", 20.0F);
 		playTactileBeep(1.78F, 0.42F);
 		if (ClientPlayNetworking.canSend(UpdateBaseBoxConfigPayload.TYPE)) {
-			ClientPlayNetworking.send(new UpdateBaseBoxConfigPayload(this.blockPos, finalFreq, finalPass));
+			ClientPlayNetworking.send(new UpdateBaseBoxConfigPayload(
+					this.blockPos,
+					payloadChannels,
+					this.selectedChannelIndex
+			));
 		}
 		initiateSmoothClose();
 	}
@@ -466,7 +632,7 @@ public class RadioBaseBoxScreen extends Screen {
 		// 1. Render 3D GeckoLib Radio Base Box with emissive LEDs + 3D surface LCD readout
 		BaseBoxModelRenderer.extractModel(graphics, this.layout, this.dialAngleDeg, focus, readout);
 
-		// 2. Render lower tactical military keypad housing
+		// 2. Render lower tactical military keypad + channel bank housing
 		int dx = this.layout.deckX();
 		int dy = this.layout.deckY();
 		int dw = this.layout.deckWidth();
@@ -483,7 +649,7 @@ public class RadioBaseBoxScreen extends Screen {
 			}
 
 			int alpha = Math.round(0xB4 * ((focus - 0.65F) / 0.35F));
-			int hintY = Math.min(this.height - 11, dy + dh + 6);
+			int hintY = Math.min(this.height - 11, dy + dh + 5);
 			Component hint = Component.translatable("gui.tlouradio.base_box.hint_controls");
 			int tw = this.font.width(hint);
 			float scale = 0.85F;
@@ -496,11 +662,14 @@ public class RadioBaseBoxScreen extends Screen {
 	}
 
 	private BaseBoxModelRenderer.PanelReadout buildPanelReadout() {
+		EditableChannel ch = currentChannel();
 		String netLabel = Component.translatable(
-				"gui.tlouradio.base_box.lcd_net_id",
-				RadioStateComponent.shortNetworkId(this.networkId)
+				"gui.tlouradio.base_box.lcd_net_channel",
+				RadioStateComponent.shortNetworkId(this.networkId).substring(0, 4),
+				this.selectedChannelIndex + 1,
+				this.channels.size()
 		).getString();
-		boolean hasPin = this.passcodeModified ? !this.passcodeBuffer.isEmpty() : this.hadInitialPasscode;
+		boolean hasPin = ch.passcodeModified ? !ch.passcode.isEmpty() : ch.hadInitialPasscode;
 		String pinStatus = Component.translatable(
 				hasPin ? "gui.tlouradio.handheld.lcd_pin_set" : "gui.tlouradio.handheld.lcd_pin_none"
 		).getString();
@@ -510,28 +679,28 @@ public class RadioBaseBoxScreen extends Screen {
 		String liveBuf;
 		int bufColor;
 		if (this.inputMode == InputMode.FREQUENCY) {
-			boolean valid = RadioStateComponent.isValidFrequency(this.frequencyBuffer);
+			boolean valid = RadioStateComponent.isValidFrequency(ch.frequency);
 			liveBuf = Component.translatable(
 					"gui.tlouradio.handheld.lcd_buf_freq",
-					this.frequencyBuffer + cursor
+					ch.frequency + cursor
 			).getString();
 			bufColor = (this.invalidFlashTicks > 0 || !valid) ? 0xFFF0B45A : 0xFFB8FFD4;
-		} else if (!this.passcodeModified) {
-			liveBuf = this.hadInitialPasscode
+		} else if (!ch.passcodeModified) {
+			liveBuf = ch.hadInitialPasscode
 					? Component.translatable("gui.tlouradio.handheld.lcd_buf_pin_masked").getString()
 					: Component.translatable("gui.tlouradio.handheld.lcd_buf_pin", cursor).getString();
 			bufColor = 0xFF8CD8EE;
 		} else {
 			liveBuf = Component.translatable(
 					"gui.tlouradio.handheld.lcd_buf_pin",
-					this.passcodeBuffer + cursor
+					ch.passcode + cursor
 			).getString();
 			bufColor = 0xFFAEEBFF;
 		}
 
 		String freqLabel = Component.translatable(
 				"gui.tlouradio.handheld.lcd_freq_unit",
-				this.frequencyBuffer
+				ch.frequency
 		).getString();
 
 		return new BaseBoxModelRenderer.PanelReadout(
@@ -551,6 +720,7 @@ public class RadioBaseBoxScreen extends Screen {
 	private final class TacticalDeckButton extends AbstractButton {
 		private final String keyId;
 		private final DeckRole role;
+		private final int slotIndex;
 		private final Runnable action;
 
 		private TacticalDeckButton(
@@ -561,11 +731,13 @@ public class RadioBaseBoxScreen extends Screen {
 				int height,
 				Component message,
 				DeckRole role,
+				int slotIndex,
 				Runnable action
 		) {
 			super(x, y, width, height, message);
 			this.keyId = keyId;
 			this.role = role;
+			this.slotIndex = slotIndex;
 			this.action = action;
 		}
 
@@ -584,7 +756,9 @@ public class RadioBaseBoxScreen extends Screen {
 		protected void extractContents(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
 			boolean depressed = this.keyId.equals(RadioBaseBoxScreen.this.depressedKeyId)
 					&& RadioBaseBoxScreen.this.keyPressDepth > 0.05F;
-			boolean dotDisabled = ".".equals(this.keyId) && RadioBaseBoxScreen.this.inputMode == InputMode.PASSCODE;
+			boolean disabled = isVisuallyDisabled();
+			boolean selectedSlot = this.role == DeckRole.CHANNEL_SLOT
+					&& this.slotIndex == RadioBaseBoxScreen.this.selectedChannelIndex;
 
 			int offset = depressed ? 1 : 0;
 			int x = getX();
@@ -596,9 +770,11 @@ public class RadioBaseBoxScreen extends Screen {
 				graphics.fill(x, getY() + getHeight() - 2, x + w, getY() + getHeight(), 0xCC090C0A);
 			}
 
-			int bg = resolveBg(depressed, isHovered(), dotDisabled);
-			int border = depressed ? 0xFF8BE8A8 : (isHovered() && !dotDisabled ? 0xFF7CA088 : 0xFF3E4C43);
-			int textCol = dotDisabled ? 0xFF666E69 : 0xFFE6ECE8;
+			int bg = resolveBg(depressed, isHovered(), disabled, selectedSlot);
+			int border = selectedSlot
+					? 0xFF8DF5B2
+					: (depressed ? 0xFF8BE8A8 : (isHovered() && !disabled ? 0xFF7CA088 : 0xFF3E4C43));
+			int textCol = disabled ? 0xFF5A635D : (selectedSlot ? 0xFFFFFFFF : 0xFFE6ECE8);
 
 			graphics.fill(x, y, x + w, y + h - (depressed ? 0 : 1), bg);
 			graphics.outline(x, y, w, h - (depressed ? 0 : 1), border);
@@ -618,9 +794,22 @@ public class RadioBaseBoxScreen extends Screen {
 			}
 		}
 
-		private int resolveBg(boolean depressed, boolean hovered, boolean disabled) {
-			if (disabled) return 0xD81B201D;
+		private boolean isVisuallyDisabled() {
 			return switch (this.role) {
+				case CHANNEL_SLOT -> this.slotIndex >= RadioBaseBoxScreen.this.channels.size();
+				case CHANNEL_ADD -> RadioBaseBoxScreen.this.channels.size() >= RadioBaseNetworkSavedData.MAX_CHANNELS_PER_BOX;
+				case CHANNEL_REMOVE -> RadioBaseBoxScreen.this.channels.size() <= 1;
+				default -> ".".equals(this.keyId) && RadioBaseBoxScreen.this.inputMode == InputMode.PASSCODE;
+			};
+		}
+
+		private int resolveBg(boolean depressed, boolean hovered, boolean disabled, boolean selectedSlot) {
+			if (disabled) return 0xC8171C19;
+			if (selectedSlot) return 0xF02B6A45;
+			return switch (this.role) {
+				case CHANNEL_SLOT -> hovered ? 0xF0304438 : 0xE8223028;
+				case CHANNEL_ADD -> depressed ? 0xF02E6E46 : (hovered ? 0xF027593B : 0xE81E452E);
+				case CHANNEL_REMOVE -> depressed ? 0xF06B342E : (hovered ? 0xF0582B26 : 0xE844221F);
 				case SAVE -> depressed ? 0xF02E6E46 : (hovered ? 0xF02A5C3D : 0xE8214830);
 				case DELETE -> depressed ? 0xF06B342E : (hovered ? 0xF0582B26 : 0xE844221F);
 				case MODE -> RadioBaseBoxScreen.this.inputMode == InputMode.PASSCODE

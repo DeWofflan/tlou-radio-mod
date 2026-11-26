@@ -8,6 +8,7 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 
+import java.math.BigDecimal;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
@@ -61,10 +62,7 @@ public record RadioStateComponent(
 	}
 
 	public RadioStateComponent {
-		frequency = Objects.requireNonNullElse(frequency, DEFAULT_FREQUENCY).trim();
-		if (frequency.isEmpty()) {
-			frequency = DEFAULT_FREQUENCY;
-		}
+		frequency = normalizeFrequency(frequency);
 		networkId = Objects.requireNonNullElse(networkId, Optional.empty());
 		passcode = Objects.requireNonNullElse(passcode, "");
 	}
@@ -116,6 +114,33 @@ public record RadioStateComponent(
 		}
 		int nextTenths = Math.clamp((long) currentTenths + deltaSteps, MIN_DIAL_TENTHS, MAX_DIAL_TENTHS);
 		return String.format(Locale.ROOT, "%d.%d", nextTenths / 10, nextTenths % 10);
+	}
+
+	/**
+	 * Canonicalizes numeric frequency strings so equivalent spellings (e.g. "125", "125.0", "0125.00")
+	 * resolve to the exact same key ("125.0") across SavedData indices and channel maps.
+	 */
+	public static String normalizeFrequency(String raw) {
+		if (raw == null) {
+			return DEFAULT_FREQUENCY;
+		}
+		String trimmed = raw.trim();
+		if (trimmed.isEmpty()) {
+			return DEFAULT_FREQUENCY;
+		}
+		if (!isValidFrequency(trimmed)) {
+			return trimmed;
+		}
+		try {
+			BigDecimal bd = new BigDecimal(trimmed).stripTrailingZeros();
+			if (bd.scale() <= 0) {
+				bd = bd.setScale(1);
+			}
+			String normalized = bd.toPlainString();
+			return normalized.length() <= MAX_FREQUENCY_LENGTH ? normalized : trimmed;
+		} catch (NumberFormatException ignored) {
+			return trimmed;
+		}
 	}
 
 	/**

@@ -11,6 +11,7 @@ import com.geckolib.renderer.layer.builtin.AutoGlowingGeoLayer;
 import com.google.common.reflect.TypeToken;
 import com.tlouradio.TlouRadioMod;
 import com.tlouradio.client.RadioClientInputHandler;
+import com.tlouradio.client.RadioClientState;
 import com.tlouradio.component.ModDataComponents;
 import com.tlouradio.component.RadioStateComponent;
 import com.tlouradio.item.HandheldRadioItem;
@@ -32,6 +33,8 @@ public class HandheldRadioGeoItemRenderer extends GeoItemRenderer<HandheldRadioI
 			DataTicket.create("tlouradio_item_flick_progress", new TypeToken<>() {});
 	private static final DataTicket<Float> PTT_PROGRESS_TICKET =
 			DataTicket.create("tlouradio_item_ptt_progress", new TypeToken<>() {});
+	private static final DataTicket<Float> RX_INTENSITY_TICKET =
+			DataTicket.create("tlouradio_item_rx_intensity", new TypeToken<>() {});
 
 	public HandheldRadioGeoItemRenderer() {
 		super(new DefaultedItemGeoModel<>(TlouRadioMod.id("handheld_radio")));
@@ -69,11 +72,16 @@ public class HandheldRadioGeoItemRenderer extends GeoItemRenderer<HandheldRadioI
 			ptt = RadioClientInputHandler.getPttRaiseProgress();
 		}
 
+		float rxIntensity = (isFirstPerson && radioState.isPowered() && radioState.antennaExtended())
+				? RadioClientState.getRxIntensity()
+				: 0.0F;
+
 		renderState.addGeckolibData(POWERED_TICKET, radioState.isPowered());
 		renderState.addGeckolibData(ANTENNA_EXTENDED_TICKET, radioState.antennaExtended());
 		renderState.addGeckolibData(DIAL_ANGLE_RAD_TICKET, computeDialAngleRad(radioState.frequency()));
 		renderState.addGeckolibData(FLICK_PROGRESS_TICKET, flick);
 		renderState.addGeckolibData(PTT_PROGRESS_TICKET, ptt);
+		renderState.addGeckolibData(RX_INTENSITY_TICKET, rxIntensity);
 	}
 
 	@Override
@@ -84,8 +92,18 @@ public class HandheldRadioGeoItemRenderer extends GeoItemRenderer<HandheldRadioI
 		float dialAngleRad = state.getOrDefaultGeckolibData(DIAL_ANGLE_RAD_TICKET, 0.0F);
 		float flick = state.getOrDefaultGeckolibData(FLICK_PROGRESS_TICKET, 0.0F);
 		float ptt = state.getOrDefaultGeckolibData(PTT_PROGRESS_TICKET, 0.0F);
+		float rx = state.getOrDefaultGeckolibData(RX_INTENSITY_TICKET, 0.0F);
 
-		snapshots.ifPresent("led_on", bone -> bone.skipRender(!powered));
+		snapshots.ifPresent("led_on", bone -> {
+			bone.skipRender(!powered);
+			if (powered && rx > 0.02F) {
+				float pulse = 0.5F + 0.5F * Mth.sin((System.currentTimeMillis() % 1000L) / 1000.0F * Mth.TWO_PI * 3.0F);
+				float ledScale = 1.0F + 0.22F * pulse * rx;
+				bone.setScaleX(ledScale);
+				bone.setScaleY(ledScale);
+				bone.setScaleZ(ledScale);
+			}
+		});
 		snapshots.ifPresent("led_off", bone -> bone.skipRender(powered));
 		snapshots.ifPresent("dial_knob", bone -> bone.setRotY(dialAngleRad));
 

@@ -65,10 +65,13 @@ public class TlouRadioVoicechatPlugin implements VoicechatPlugin {
 
 	private void onServerStopped(VoicechatServerStoppedEvent event) {
 		event.getVoicechat().unregisterVolumeCategory(RADIO_CATEGORY_ID);
+		RadioAudioDspProcessor.clearAll();
 	}
 
 	private void onPlayerDisconnected(PlayerDisconnectedEvent event) {
-		RadioNetworkManager.removePlayer(event.getPlayerUuid());
+		UUID playerId = event.getPlayerUuid();
+		RadioAudioDspProcessor.removeSpeaker(playerId);
+		RadioNetworkManager.removePlayer(playerId);
 	}
 
 	/**
@@ -118,7 +121,9 @@ public class TlouRadioVoicechatPlugin implements VoicechatPlugin {
 
 		VoicechatServerApi api = event.getVoicechat();
 		MicrophonePacket micPacket = event.getPacket();
-		byte[] opusData = micPacket.getOpusEncodedData();
+		byte[] rawOpusData = micPacket.getOpusEncodedData();
+		// Execute tactical radio DSP strictly ONCE per speaker packet, outside the receiver loop
+		byte[] opusData = RadioAudioDspProcessor.process(api, speakerId, rawOpusData);
 
 		// Determine players already hearing the speaker's live proximity voice to prevent double-audio echo
 		double proximityDistance = api.getVoiceChatDistance();
@@ -174,6 +179,9 @@ public class TlouRadioVoicechatPlugin implements VoicechatPlugin {
 					&& !playersInDirectProximity.contains(receiverId)
 					&& deliveredRecipients.add(receiverId)) {
 				api.sendLocationalSoundPacketTo(receiverConn, radioSoundPacket);
+				if (channelListeners.contains(receiverId)) {
+					RadioNetworkManager.notifyReceivingSignal(receiverId);
+				}
 			}
 
 			// 2. Spill audio 6 blocks around physical open-radio holders so nearby players also hear the radio

@@ -170,10 +170,11 @@ public class RadioBaseBoxBlock extends Block implements EntityBlock {
 		baseBox.ensureRegistered(serverLevel);
 
 		RadioStateComponent current = radioStack.getOrDefault(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT);
+		var selectedChannel = baseBox.getSelectedChannel();
 		RadioStateComponent paired = current.withPairedNetwork(
 				baseBox.getNetworkId(),
-				baseBox.getFrequency(),
-				baseBox.getPasscode()
+				selectedChannel.frequency(),
+				selectedChannel.passcode()
 		);
 		radioStack.set(ModDataComponents.RADIO_STATE, paired);
 
@@ -190,7 +191,7 @@ public class RadioBaseBoxBlock extends Block implements EntityBlock {
 
 		Component pairedMsg = Component.translatable(
 				"message.tlouradio.paired_to_base",
-				baseBox.getFrequency(),
+				selectedChannel.frequency(),
 				RadioStateComponent.shortNetworkId(baseBox.getNetworkId())
 		).withStyle(ChatFormatting.AQUA);
 		serverPlayer.sendOverlayMessage(pairedMsg);
@@ -227,8 +228,8 @@ public class RadioBaseBoxBlock extends Block implements EntityBlock {
 				new OpenBaseBoxScreenPayload(
 						pos.immutable(),
 						baseBox.getNetworkId(),
-						baseBox.getFrequency(),
-						baseBox.getPasscode()
+						baseBox.getChannels(),
+						baseBox.getSelectedChannelIndex()
 				)
 		);
 		return InteractionResult.SUCCESS;

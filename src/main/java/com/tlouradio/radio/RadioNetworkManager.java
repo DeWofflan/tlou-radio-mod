@@ -4,21 +4,27 @@ import com.tlouradio.component.ModDataComponents;
 import com.tlouradio.component.RadioStateComponent;
 import com.tlouradio.item.HandheldRadioItem;
 import com.tlouradio.network.RadioChannelKey;
+import com.tlouradio.network.payload.RadioReceivingSignalPayload;
+import com.tlouradio.network.payload.SyncRadioTransmitterPayload;
+import com.tlouradio.sound.ModSounds;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -30,19 +36,28 @@ import java.util.concurrent.ConcurrentHashMap;
  * Safe to query lock-free from Simple Voice Chat's UDP thread without touching Minecraft main-thread objects.
  */
 public final class RadioNetworkManager {
+	private static final long RX_SIGNAL_RATE_LIMIT_MS = 150L;
+
 	private static final ConcurrentHashMap<RadioChannelKey, Set<UUID>> CHANNEL_LISTENERS = new ConcurrentHashMap<>();
 	private static final ConcurrentHashMap<UUID, Set<RadioChannelKey>> PLAYER_SUBSCRIPTIONS = new ConcurrentHashMap<>();
 	private static final ConcurrentHashMap<UUID, RadioChannelKey> ACTIVE_TRANSMITTERS = new ConcurrentHashMap<>();
+	private static final ConcurrentHashMap<UUID, Long> LAST_RX_SIGNAL_MS = new ConcurrentHashMap<>();
 	private static final Set<UUID> ONLINE_PLAYERS = ConcurrentHashMap.newKeySet();
+
+	private static volatile MinecraftServer activeServer;
 
 	private RadioNetworkManager() {
 	}
 
 	public static void initialize() {
+		ServerLifecycleEvents.SERVER_STARTED.register(server -> activeServer = server);
+
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+			activeServer = server;
 			ServerPlayer player = handler.getPlayer();
 			ONLINE_PLAYERS.add(player.getUUID());
 			syncPlayer(player);
+			sendTransmitterSnapshotTo(player);
 		});
 
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
@@ -59,22 +74,22 @@ public final class RadioNetworkManager {
 
 		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> syncPlayer(newPlayer));
 
-		ServerLifecycleEvents.SERVER_STOPPED.register(server -> clearAll());
+		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+			clearAll();
+			activeServer = null;
+		});
 	}
 
 	/**
 	 * O(1) validation of a radio state against Overworld {@link RadioBaseNetworkSavedData}.
-	 * Open/free-frequency radios ({@code networkId.isEmpty()}) continue to operate freely.
+	 * Claimed Base Box frequencies require matching networkId + passcode; unclaimed frequencies operate freely.
 	 */
 	public static boolean isRadioStateAuthorized(MinecraftServer server, RadioStateComponent state) {
 		if (state == null || !state.isPowered() || !state.antennaExtended()) {
 			return false;
 		}
-		if (state.networkId().isEmpty()) {
-			return true;
-		}
 		if (server == null) {
-			return false;
+			return state.networkId().isEmpty();
 		}
 		return RadioBaseNetworkSavedData.get(server).isValidChannel(state.toChannelKey());
 	}
@@ -111,7 +126,9 @@ public final class RadioNetworkManager {
 			return;
 		}
 		if (!player.isAlive() || player.isSpectator() || player.hasDisconnected()) {
-			ACTIVE_TRANSMITTERS.remove(playerId);
+			if (ACTIVE_TRANSMITTERS.remove(playerId) != null) {
+				broadcastTransmitterState(player.level().getServer(), playerId, false);
+			}
 			return;
 		}
 
@@ -119,7 +136,10 @@ public final class RadioNetworkManager {
 		if (heldChannel.isPresent()) {
 			ACTIVE_TRANSMITTERS.put(playerId, heldChannel.get());
 		} else {
-			ACTIVE_TRANSMITTERS.remove(playerId);
+			if (ACTIVE_TRANSMITTERS.remove(playerId) != null) {
+				playRadioSound(player, ModSounds.RADIO_PTT_END, 0.30F, 1.0F);
+				broadcastTransmitterState(player.level().getServer(), playerId, false);
+			}
 		}
 	}
 
@@ -132,21 +152,35 @@ public final class RadioNetworkManager {
 			return false;
 		}
 		UUID playerId = player.getUUID();
+		MinecraftServer server = player.level().getServer();
 		if (!active) {
-			ACTIVE_TRANSMITTERS.remove(playerId);
+			if (ACTIVE_TRANSMITTERS.remove(playerId) != null) {
+				if (player.isAlive() && !player.hasDisconnected()) {
+					playRadioSound(player, ModSounds.RADIO_PTT_END, 0.30F, 1.0F);
+				}
+				broadcastTransmitterState(server, playerId, false);
+			}
 			return false;
 		}
 		if (!player.isAlive() || player.isSpectator() || player.hasDisconnected()) {
-			ACTIVE_TRANSMITTERS.remove(playerId);
+			if (ACTIVE_TRANSMITTERS.remove(playerId) != null) {
+				broadcastTransmitterState(server, playerId, false);
+			}
 			return false;
 		}
 
 		Optional<RadioChannelKey> heldChannel = findHeldPoweredRadioChannel(player);
 		if (heldChannel.isEmpty()) {
-			ACTIVE_TRANSMITTERS.remove(playerId);
+			if (ACTIVE_TRANSMITTERS.remove(playerId) != null) {
+				broadcastTransmitterState(server, playerId, false);
+			}
 			if (holdsRetractedAntennaPoweredRadio(player)) {
 				player.sendOverlayMessage(
 						Component.translatable("message.tlouradio.antenna_retracted_no_signal").withStyle(ChatFormatting.GOLD)
+				);
+			} else if (holdsEncryptedOrWrongPasscodeRadio(player)) {
+				player.sendOverlayMessage(
+						Component.translatable("message.tlouradio.frequency_encrypted_wrong_passcode").withStyle(ChatFormatting.RED)
 				);
 			} else if (holdsDisconnectedPairedPoweredRadio(player)) {
 				player.sendOverlayMessage(
@@ -157,14 +191,18 @@ public final class RadioNetworkManager {
 		}
 
 		syncPlayer(player);
-		ACTIVE_TRANSMITTERS.put(playerId, heldChannel.get());
+		boolean wasActive = ACTIVE_TRANSMITTERS.put(playerId, heldChannel.get()) != null;
+		if (!wasActive) {
+			playRadioSound(player, ModSounds.RADIO_PTT_START, 0.35F, 1.0F);
+			broadcastTransmitterState(server, playerId, true);
+		}
 		return true;
 	}
 
 	/**
 	 * Sabotage & credential-change invalidation hook.
-	 * Immediately drops all affected online listeners and active PTT transmitters on {@code networkId}
-	 * and notifies impacted players via actionbar + disconnect sound.
+	 * Drops ONLY online listeners and active PTT transmitters on {@code networkId} whose specific
+	 * channel is no longer valid (when destroyed, all channels of {@code networkId} are invalid).
 	 */
 	public static void invalidateBaseNetwork(MinecraftServer server, UUID networkId, boolean destroyed) {
 		if (server == null || networkId == null) {
@@ -206,32 +244,108 @@ public final class RadioNetworkManager {
 			if (player != null && !player.hasDisconnected()) {
 				syncPlayer(player);
 				player.sendOverlayMessage(disconnectMessage);
-				player.level().playSound(
-						null,
-						player.getX(),
-						player.getY(),
-						player.getZ(),
-						SoundEvents.BEACON_DEACTIVATE,
-						SoundSource.PLAYERS,
-						0.35F,
-						1.8F
-				);
+				playRadioSound(player, ModSounds.RADIO_SABOTAGE, 0.45F, 1.0F);
 			} else {
 				removePlayer(playerId);
 			}
 		}
 	}
 
+	/**
+	 * Revalidates any online players currently operating in free-frequency mode ({@code networkId.isEmpty()})
+	 * on frequencies newly claimed by a Base Box so they cannot continue listening/transmitting unauthenticated.
+	 */
+	public static void revalidateFreeListenersForFrequencies(MinecraftServer server, Set<String> claimedFrequencies) {
+		if (server == null || claimedFrequencies == null || claimedFrequencies.isEmpty()) {
+			return;
+		}
+		Set<String> normalized = new HashSet<>(claimedFrequencies.size());
+		for (String f : claimedFrequencies) {
+			normalized.add(RadioStateComponent.normalizeFrequency(f));
+		}
+
+		Set<UUID> affectedPlayerIds = new HashSet<>();
+		for (Map.Entry<UUID, Set<RadioChannelKey>> entry : PLAYER_SUBSCRIPTIONS.entrySet()) {
+			for (RadioChannelKey channel : entry.getValue()) {
+				if (channel.networkId().isEmpty() && normalized.contains(channel.frequency())) {
+					affectedPlayerIds.add(entry.getKey());
+					break;
+				}
+			}
+		}
+		for (Map.Entry<UUID, RadioChannelKey> entry : ACTIVE_TRANSMITTERS.entrySet()) {
+			RadioChannelKey channel = entry.getValue();
+			if (channel.networkId().isEmpty() && normalized.contains(channel.frequency())) {
+				affectedPlayerIds.add(entry.getKey());
+			}
+		}
+
+		if (affectedPlayerIds.isEmpty()) {
+			return;
+		}
+
+		Component msg = Component.translatable("message.tlouradio.frequency_claimed_disconnect")
+				.withStyle(ChatFormatting.RED);
+		for (UUID playerId : affectedPlayerIds) {
+			ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+			if (player != null && !player.hasDisconnected()) {
+				syncPlayer(player);
+				player.sendOverlayMessage(msg);
+				playRadioSound(player, ModSounds.RADIO_SABOTAGE, 0.40F, 1.0F);
+			} else {
+				removePlayer(playerId);
+			}
+		}
+	}
+
+	/**
+	 * Rate-limited S2C pulse called from Simple Voice Chat's UDP thread when a radio audio packet
+	 * is delivered to {@code receiverId}. Safely hops to the server thread and caps rate to 1 packet / 150ms.
+	 */
+	public static void notifyReceivingSignal(UUID receiverId) {
+		if (receiverId == null) {
+			return;
+		}
+		MinecraftServer server = activeServer;
+		if (server == null || !ONLINE_PLAYERS.contains(receiverId)) {
+			return;
+		}
+		long now = System.currentTimeMillis();
+		Long prev = LAST_RX_SIGNAL_MS.get(receiverId);
+		if (prev != null && (now - prev) < RX_SIGNAL_RATE_LIMIT_MS) {
+			return;
+		}
+		if (prev == null) {
+			if (LAST_RX_SIGNAL_MS.putIfAbsent(receiverId, now) != null) {
+				return;
+			}
+		} else if (!LAST_RX_SIGNAL_MS.replace(receiverId, prev, now)) {
+			return;
+		}
+
+		server.execute(() -> {
+			ServerPlayer player = server.getPlayerList().getPlayer(receiverId);
+			if (player != null && !player.hasDisconnected()
+					&& ServerPlayNetworking.canSend(player, RadioReceivingSignalPayload.TYPE)) {
+				ServerPlayNetworking.send(player, RadioReceivingSignalPayload.INSTANCE);
+			}
+		});
+	}
+
 	public static void removePlayer(UUID playerId) {
 		if (playerId == null) {
 			return;
 		}
-		ACTIVE_TRANSMITTERS.remove(playerId);
+		LAST_RX_SIGNAL_MS.remove(playerId);
+		boolean wasTransmitting = ACTIVE_TRANSMITTERS.remove(playerId) != null;
 		Set<RadioChannelKey> previous = PLAYER_SUBSCRIPTIONS.remove(playerId);
 		if (previous != null) {
 			for (RadioChannelKey channel : previous) {
 				removeListenerFromChannel(channel, playerId);
 			}
+		}
+		if (wasTransmitting) {
+			broadcastTransmitterState(activeServer, playerId, false);
 		}
 	}
 
@@ -239,6 +353,7 @@ public final class RadioNetworkManager {
 		ACTIVE_TRANSMITTERS.clear();
 		PLAYER_SUBSCRIPTIONS.clear();
 		CHANNEL_LISTENERS.clear();
+		LAST_RX_SIGNAL_MS.clear();
 		ONLINE_PLAYERS.clear();
 	}
 
@@ -269,6 +384,49 @@ public final class RadioNetworkManager {
 	 */
 	public static Set<UUID> getOnlinePlayers() {
 		return Collections.unmodifiableSet(ONLINE_PLAYERS);
+	}
+
+	private static void sendTransmitterSnapshotTo(ServerPlayer player) {
+		if (player == null || player.hasDisconnected()) {
+			return;
+		}
+		if (!ServerPlayNetworking.canSend(player, SyncRadioTransmitterPayload.TYPE)) {
+			return;
+		}
+		List<UUID> snapshot = new ArrayList<>(ACTIVE_TRANSMITTERS.keySet());
+		ServerPlayNetworking.send(player, SyncRadioTransmitterPayload.fullSnapshot(snapshot));
+	}
+
+	private static void broadcastTransmitterState(MinecraftServer server, UUID playerId, boolean transmitting) {
+		if (server == null || playerId == null) {
+			return;
+		}
+		Runnable sendTask = () -> {
+			SyncRadioTransmitterPayload payload = SyncRadioTransmitterPayload.singleUpdate(playerId, transmitting);
+			for (ServerPlayer recipient : server.getPlayerList().getPlayers()) {
+				if (!recipient.hasDisconnected() && ServerPlayNetworking.canSend(recipient, SyncRadioTransmitterPayload.TYPE)) {
+					ServerPlayNetworking.send(recipient, payload);
+				}
+			}
+		};
+		if (server.isSameThread()) {
+			sendTask.run();
+		} else {
+			server.execute(sendTask);
+		}
+	}
+
+	private static void playRadioSound(ServerPlayer player, SoundEvent sound, float volume, float pitch) {
+		player.level().playSound(
+				null,
+				player.getX(),
+				player.getY(),
+				player.getZ(),
+				sound,
+				SoundSource.PLAYERS,
+				volume,
+				pitch
+		);
 	}
 
 	private static Set<RadioChannelKey> collectPoweredRadioChannels(ServerPlayer player) {
@@ -320,6 +478,26 @@ public final class RadioNetworkManager {
 		}
 		RadioStateComponent state = stack.getOrDefault(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT);
 		return state.isPowered() && !state.antennaExtended();
+	}
+
+	private static boolean holdsEncryptedOrWrongPasscodeRadio(ServerPlayer player) {
+		MinecraftServer server = player.level().getServer();
+		return isEncryptedOrWrongPasscodeRadio(server, player.getMainHandItem())
+				|| isEncryptedOrWrongPasscodeRadio(server, player.getOffhandItem());
+	}
+
+	private static boolean isEncryptedOrWrongPasscodeRadio(MinecraftServer server, ItemStack stack) {
+		if (server == null || stack == null || stack.isEmpty() || !(stack.getItem() instanceof HandheldRadioItem)) {
+			return false;
+		}
+		RadioStateComponent state = stack.getOrDefault(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT);
+		if (!state.isPowered() || !state.antennaExtended()) {
+			return false;
+		}
+		if (state.networkId().isPresent()) {
+			return false;
+		}
+		return RadioBaseNetworkSavedData.get(server).lookupFrequency(state.frequency()).isPresent();
 	}
 
 	private static boolean holdsDisconnectedPairedPoweredRadio(ServerPlayer player) {

@@ -4,6 +4,7 @@ import com.geckolib.animatable.client.GeoRenderProvider;
 import com.geckolib.renderer.GeoItemRenderer;
 import com.tlouradio.block.entity.ModBlockEntities;
 import com.tlouradio.client.RadioClientInputHandler;
+import com.tlouradio.client.RadioClientState;
 import com.tlouradio.client.gui.HandheldRadioScreen;
 import com.tlouradio.client.gui.RadioBaseBoxScreen;
 import com.tlouradio.client.gui.render.BaseBoxModelRenderer;
@@ -12,8 +13,11 @@ import com.tlouradio.client.renderer.HandheldRadioGeoItemRenderer;
 import com.tlouradio.client.renderer.RadioBaseBoxGeoRenderer;
 import com.tlouradio.client.renderer.RadioBaseBoxItemGeoRenderer;
 import com.tlouradio.network.payload.OpenBaseBoxScreenPayload;
+import com.tlouradio.network.payload.RadioReceivingSignalPayload;
+import com.tlouradio.network.payload.SyncRadioTransmitterPayload;
 import com.tlouradio.radio.RadioClientHooks;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.rendering.v1.BlockEntityRendererRegistry;
 import net.minecraft.client.Minecraft;
@@ -62,9 +66,25 @@ public class TlouRadioClient implements ClientModInitializer {
 				context.client().gui.setScreen(new RadioBaseBoxScreen(
 						payload.pos(),
 						payload.networkId(),
-						payload.frequency(),
-						payload.passcode()
+						payload.channels(),
+						payload.selectedChannelIndex()
 				))
 		);
+
+		ClientPlayNetworking.registerGlobalReceiver(SyncRadioTransmitterPayload.TYPE, (payload, context) -> {
+			if (payload.fullSync()) {
+				RadioClientState.replaceAllTransmitters(payload.playerIds());
+			} else {
+				for (var id : payload.playerIds()) {
+					RadioClientState.setTransmitting(id, payload.transmitting());
+				}
+			}
+		});
+
+		ClientPlayNetworking.registerGlobalReceiver(RadioReceivingSignalPayload.TYPE, (payload, context) ->
+				RadioClientState.markReceivingSignal()
+		);
+
+		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> RadioClientState.clear());
 	}
 }
