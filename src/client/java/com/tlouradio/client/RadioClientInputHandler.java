@@ -3,6 +3,7 @@ package com.tlouradio.client;
 import com.mojang.blaze3d.platform.InputConstants;
 import com.tlouradio.TlouRadioMod;
 import com.tlouradio.client.gui.HandheldRadioScreen;
+import com.tlouradio.client.gui.RadioInspectionTransition;
 import com.tlouradio.component.ModDataComponents;
 import com.tlouradio.component.RadioStateComponent;
 import com.tlouradio.item.HandheldRadioItem;
@@ -15,26 +16,34 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.event.client.player.ClientPreAttackCallback;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * Coordinates client-side PTT transmission state (both physical {@code X} key and in-screen 3D PTT latch)
- * as well as frame-accurate 1st-person flip-open flick and mouth-raise PTT animations.
+ * Coordinates client-side radio controls:
+ * <ul>
+ *   <li>{@code X} ({@link #POWER_KEY}): single-press edge-latched Power ON/OFF toggle via {@code consumeClick()}.</li>
+ *   <li>Left-Click Hold ({@code options.keyAttack.isDown()}): Push-to-Talk (PTT) strictly when {@code gui.screen() == null}
+ *       and holding an active, powered, antenna-extended radio; cancels vanilla block breaking & attack swing.</li>
+ *   <li>In-screen side {@code ptt_button}: independent PTT channel inside {@link HandheldRadioScreen}.</li>
+ * </ul>
  */
 public final class RadioClientInputHandler {
 	public static final KeyMapping.Category RADIO_KEY_CATEGORY =
 			KeyMapping.Category.register(TlouRadioMod.id("general"));
 
-	public static final KeyMapping PTT_KEY = KeyMappingHelper.registerKeyMapping(new KeyMapping(
-			"key.tlouradio.ptt",
+	public static final KeyMapping POWER_KEY = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+			"key.tlouradio.power",
 			InputConstants.KEY_X,
 			RADIO_KEY_CATEGORY
 	));
 
 	private static final float FLICK_DURATION_SECONDS = 0.45F;
 
+	private static boolean powerKeyLatched = false;
 	private static boolean pttSentActive = false;
 	private static boolean screenPttActive = false;
 
@@ -53,37 +62,70 @@ public final class RadioClientInputHandler {
 
 	public static void initialize() {
 		ClientPreAttackCallback.EVENT.register((client, player, clickCount) -> {
-			if (player != null && !player.isSpectator() && player.getMainHandItem().getItem() instanceof HandheldRadioItem) {
-				if (clickCount > 0 && ClientPlayNetworking.canSend(ToggleRadioPowerPayload.TYPE)) {
-					ItemStack mainStack = player.getMainHandItem();
-					RadioStateComponent state = mainStack.getOrDefault(
-							ModDataComponents.RADIO_STATE,
-							RadioStateComponent.DEFAULT
-					);
-					// Turning radio ON via left-click triggers the tactical flip-open wrist & antenna flick
-					if (!state.isPowered() && state.antennaExtended()) {
-						triggerFlick(InteractionHand.MAIN_HAND);
-					}
-					ClientPlayNetworking.send(ToggleRadioPowerPayload.INSTANCE);
-				}
-				return true;
+			if (player == null || player.isSpectator()) {
+				return false;
 			}
-			return false;
+			boolean mainIsRadio = player.getMainHandItem().getItem() instanceof HandheldRadioItem;
+			boolean offIsRadioWithEmptyMain = player.getMainHandItem().isEmpty()
+					&& player.getOffhandItem().getItem() instanceof HandheldRadioItem;
+			// Cancel block breaking, entity attacking, and attack swing while holding a radio
+			return mainIsRadio || offIsRadioWithEmptyMain;
 		});
 
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
+			handlePowerKeySinglePress(client);
 			syncPttState(client);
 			trackHeldRadioTransitions(client);
 		});
 
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+			powerKeyLatched = false;
 			pttSentActive = false;
 			screenPttActive = false;
 			wasHoldingMainRadio = false;
 			wasHoldingOffRadio = false;
 			lastSelectedSlot = -1;
 			pttRaiseProgress = 0.0F;
+			RadioInspectionTransition.resetGlobalFovImmediately();
 		});
+	}
+
+	private static void handlePowerKeySinglePress(Minecraft client) {
+		if (!POWER_KEY.isDown()) {
+			powerKeyLatched = false;
+		}
+
+		boolean hadClick = false;
+		while (POWER_KEY.consumeClick()) {
+			hadClick = true;
+		}
+
+		if (!hadClick || powerKeyLatched) {
+			return;
+		}
+		if (client.gui.screen() != null || !client.mouseHandler.isMouseGrabbed()) {
+			return;
+		}
+		if (client.player == null || !client.player.isAlive() || client.player.isSpectator()) {
+			return;
+		}
+
+		ItemStack mainStack = client.player.getMainHandItem();
+		if (!(mainStack.getItem() instanceof HandheldRadioItem)) {
+			return;
+		}
+
+		powerKeyLatched = true;
+		RadioStateComponent state = mainStack.getOrDefault(
+				ModDataComponents.RADIO_STATE,
+				RadioStateComponent.DEFAULT
+		);
+		if (!state.isPowered() && state.antennaExtended()) {
+			triggerFlick(InteractionHand.MAIN_HAND);
+		}
+		if (ClientPlayNetworking.canSend(ToggleRadioPowerPayload.TYPE)) {
+			ClientPlayNetworking.send(ToggleRadioPowerPayload.INSTANCE);
+		}
 	}
 
 	/**
@@ -98,11 +140,9 @@ public final class RadioClientInputHandler {
 	 * Guaranteed safe release called when mouse is released or {@link HandheldRadioScreen} closes.
 	 */
 	public static void releaseScreenPtt() {
-		if (screenPttActive || (pttSentActive && !(Minecraft.getInstance().mouseHandler.isMouseGrabbed() && PTT_KEY.isDown()))) {
+		if (screenPttActive || pttSentActive) {
 			screenPttActive = false;
 			syncPttState(Minecraft.getInstance());
-		} else {
-			screenPttActive = false;
 		}
 	}
 
@@ -123,9 +163,6 @@ public final class RadioClientInputHandler {
 		}
 	}
 
-	/**
-	 * Updates frame-smooth 1st-person animation blend factors at render framerate.
-	 */
 	public static void updateRenderAnimationFrame() {
 		long now = System.nanoTime();
 		float dt = Mth.clamp((now - lastFrameNanos) / 1_000_000_000.0F, 0.0F, 0.1F);
@@ -136,7 +173,7 @@ public final class RadioClientInputHandler {
 				&& client.player != null
 				&& client.gui.screen() == null;
 		float targetPtt = activeInWorldPtt ? 1.0F : 0.0F;
-		float speed = activeInWorldPtt ? 11.0F : 9.0F;
+		float speed = activeInWorldPtt ? 12.0F : 9.5F;
 		pttRaiseProgress = Mth.clamp(
 				pttRaiseProgress + (targetPtt - pttRaiseProgress) * Math.min(1.0F, dt * speed),
 				0.0F,
@@ -148,9 +185,6 @@ public final class RadioClientInputHandler {
 		return pttRaiseProgress;
 	}
 
-	/**
-	 * Returns normalized progress {@code (0..1)} of an active flip-open flick for {@code hand}, or {@code 0} if idle.
-	 */
 	public static float getFlickProgress(InteractionHand hand) {
 		long start = (hand == InteractionHand.MAIN_HAND) ? mainFlickStartNanos : offFlickStartNanos;
 		if (start == 0L) {
@@ -167,19 +201,23 @@ public final class RadioClientInputHandler {
 		if (client == null) {
 			return;
 		}
-		boolean inRadioScreen = client.gui.screen() instanceof HandheldRadioScreen;
+		Screen currentScreen = client.gui.screen();
+		boolean inRadioScreen = currentScreen instanceof HandheldRadioScreen;
 		if (!inRadioScreen) {
 			screenPttActive = false;
 		}
 
-		boolean allowPttInUi = client.mouseHandler.isMouseGrabbed() || inRadioScreen;
-		boolean triggerHeld = PTT_KEY.isDown() || (inRadioScreen && screenPttActive);
+		// Left-click attack PTT is strictly active ONLY when no Screen is open
+		boolean worldAttackPtt = (currentScreen == null)
+				&& client.mouseHandler.isMouseGrabbed()
+				&& client.options.keyAttack.isDown();
+		boolean independentScreenPtt = inRadioScreen && screenPttActive;
+
 		boolean wantsPtt = client.player != null
 				&& client.player.isAlive()
 				&& !client.player.isSpectator()
-				&& allowPttInUi
-				&& triggerHeld
-				&& holdsAnyRadio(client.player);
+				&& (worldAttackPtt || independentScreenPtt)
+				&& holdsTransmitCapableRadio(client.player);
 
 		if (wantsPtt != pttSentActive) {
 			pttSentActive = wantsPtt;
@@ -189,9 +227,17 @@ public final class RadioClientInputHandler {
 		}
 	}
 
-	private static boolean holdsAnyRadio(net.minecraft.client.player.LocalPlayer player) {
-		return player.getMainHandItem().getItem() instanceof HandheldRadioItem
-				|| player.getOffhandItem().getItem() instanceof HandheldRadioItem;
+	private static boolean holdsTransmitCapableRadio(LocalPlayer player) {
+		return isPoweredAndAntennaExtended(player.getMainHandItem())
+				|| isPoweredAndAntennaExtended(player.getOffhandItem());
+	}
+
+	private static boolean isPoweredAndAntennaExtended(ItemStack stack) {
+		if (stack == null || stack.isEmpty() || !(stack.getItem() instanceof HandheldRadioItem)) {
+			return false;
+		}
+		RadioStateComponent state = stack.getOrDefault(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT);
+		return state.isPowered() && state.antennaExtended();
 	}
 
 	private static void trackHeldRadioTransitions(Minecraft client) {

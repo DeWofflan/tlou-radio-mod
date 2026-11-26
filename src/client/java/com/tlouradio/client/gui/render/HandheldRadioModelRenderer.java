@@ -12,35 +12,37 @@ import com.tlouradio.item.HandheldRadioItem;
 import com.tlouradio.item.ModItems;
 import net.fabricmc.fabric.api.client.rendering.v1.PictureInPictureRendererRegistry;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
 import net.minecraft.client.gui.render.pip.PictureInPictureRenderer;
+import net.minecraft.client.renderer.OrderedSubmitNodeCollector;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.state.gui.pip.PictureInPictureRenderState;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
+import net.minecraft.network.chat.Component;
+import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.util.Mth;
+import org.joml.Matrix4f;
+import org.joml.Vector2f;
+import org.joml.Vector3f;
 
 import java.util.Objects;
 
-/**
- * Renders the actual GeckoLib 5 {@code handheld_radio.geo.json} 3D model inside
- * {@code HandheldRadioScreen} using Minecraft 26.3's {@link PictureInPictureRenderer} pipeline,
- * with live ±6° mouse parallax, 3D physical keycap plunger depression, draggable telescopic
- * antenna travel, rotary {@code dial_knob}, and pressable side {@code ptt_button}.
- */
 public final class HandheldRadioModelRenderer {
-	public static final float MAX_PARALLAX_DEG = 6.0F;
+	public static final float ISOMETRIC_PITCH_DEG = 5.0F;
+	public static final float ISOMETRIC_YAW_DEG = -13.0F;
 
-	private static final int BODY_WIDTH_PX = 124;
-	private static final int BODY_HEIGHT_PX = 184;
-	private static final int PIP_HALF_WIDTH_PX = 96;
-	private static final int PIP_TOP_EXTENT_PX = 176;
-	private static final int PIP_BOTTOM_EXTENT_PX = 108;
-	private static final float PIP_ORIGIN_Y_RATIO =
-			(float) PIP_TOP_EXTENT_PX / (float) (PIP_TOP_EXTENT_PX + PIP_BOTTOM_EXTENT_PX);
-	private static final float PIP_MODEL_SCALE = 160.0F;
+	private static final int PIP_HALF_WIDTH_PX = 156;
+	private static final float BASE_PIP_MODEL_SCALE = 178.0F;
 	private static final int FULL_BRIGHT_LIGHT = 15728880;
-	private static final float FRONT_SURFACE_Z_PX = 23.5F;
+	// Balances extended antenna headroom (15.9 geo units up) vs chassis bottom (8.5 geo units down)
+	private static final float PIP_ORIGIN_Y_RATIO = 0.635F;
+
+	private static final Matrix4f STATIC_ISOMETRIC_MATRIX = new Matrix4f()
+			.rotateZ(Mth.PI)
+			.rotateX(ISOMETRIC_PITCH_DEG * Mth.DEG_TO_RAD)
+			.rotateY(ISOMETRIC_YAW_DEG * Mth.DEG_TO_RAD);
 
 	private static final String[] ALL_KEY_BONES = {
 			"key_0", "key_1", "key_2", "key_3", "key_4",
@@ -57,54 +59,97 @@ public final class HandheldRadioModelRenderer {
 
 	public static DeviceLayout computeLayout(int screenWidth, int screenHeight) {
 		int centerX = screenWidth / 2;
-		int bodyCenterY = Mth.clamp(screenHeight / 2 + 22, 122, Math.max(122, screenHeight - 98));
+		int pipY0 = 0;
+		int pipY1 = Math.max(120, screenHeight);
+		int originY = Math.round(pipY1 * PIP_ORIGIN_Y_RATIO);
 
-		int bodyLeft = centerX - (BODY_WIDTH_PX / 2);
-		int bodyTop = bodyCenterY - (BODY_HEIGHT_PX / 2);
+		// Guarantee extended antenna tip (y=15.8 geo) never clips against the top edge on any GUI scale
+		float availableTopPx = originY - 12.0F;
+		float maxScaleForTop = availableTopPx / (16.1F / 16.0F);
+		float availableBottomPx = (pipY1 - originY) - 24.0F;
+		float maxScaleForBottom = availableBottomPx / (8.6F / 16.0F);
+		float modelScale = Mth.clamp(
+				Math.min(BASE_PIP_MODEL_SCALE, Math.min(maxScaleForTop, maxScaleForBottom)),
+				96.0F,
+				BASE_PIP_MODEL_SCALE
+		);
 
-		int lcdWidth = 106;
-		int lcdHeight = 46;
-		int lcdX = centerX - (lcdWidth / 2);
-		int lcdY = bodyTop + 18;
+		int pipX0 = Math.max(0, centerX - PIP_HALF_WIDTH_PX);
+		int pipX1 = Math.min(screenWidth, centerX + PIP_HALF_WIDTH_PX);
 
-		int keypadWidth = 106;
-		int keypadHeight = 97;
-		int keypadX = centerX - (keypadWidth / 2);
-		int keypadY = bodyTop + 73;
+		return new DeviceLayout(centerX, originY, modelScale, pipX0, pipY0, pipX1, pipY1);
+	}
 
-		int pipX0 = centerX - PIP_HALF_WIDTH_PX;
-		int pipX1 = centerX + PIP_HALF_WIDTH_PX;
-		int pipY0 = bodyCenterY - PIP_TOP_EXTENT_PX;
-		int pipY1 = bodyCenterY + PIP_BOTTOM_EXTENT_PX;
+	public static Vector2f projectGeoPointToScreen(
+			DeviceLayout layout,
+			float geoX,
+			float geoY,
+			float geoZ,
+			float focusProgress,
+			float handSideSign
+	) {
+		float focus = Mth.clamp(focusProgress, 0.0F, 1.0F);
+		float invFocus = 1.0F - focus;
+		Vector3f pt = new Vector3f(-geoX / 16.0F, geoY / 16.0F, geoZ / 16.0F);
 
-		return new DeviceLayout(
-				centerX,
-				bodyCenterY,
-				bodyLeft,
-				bodyTop,
-				BODY_WIDTH_PX,
-				BODY_HEIGHT_PX,
-				lcdX,
-				lcdY,
-				lcdWidth,
-				lcdHeight,
-				keypadX,
-				keypadY,
-				keypadWidth,
-				keypadHeight,
-				pipX0,
-				pipY0,
-				pipX1,
-				pipY1
+		if (invFocus <= 0.001F) {
+			STATIC_ISOMETRIC_MATRIX.transformPosition(pt);
+		} else {
+			float s = Mth.lerp(focus, 0.82F, 1.0F);
+			Matrix4f dyn = new Matrix4f()
+					.translate(handSideSign * 0.28F * invFocus, 0.92F * invFocus, 0.0F)
+					.scale(s, s, s)
+					.rotateZ(Mth.PI)
+					.rotateX((ISOMETRIC_PITCH_DEG + (6.0F * invFocus)) * Mth.DEG_TO_RAD)
+					.rotateY(ISOMETRIC_YAW_DEG * Mth.DEG_TO_RAD);
+			dyn.transformPosition(pt);
+		}
+
+		float pipCenterX = (layout.pipX0() + layout.pipX1()) * 0.5F;
+		float pipOriginY = layout.pipY0() + (layout.pipY1() - layout.pipY0()) * PIP_ORIGIN_Y_RATIO;
+		return new Vector2f(
+				pipCenterX + (pt.x * layout.modelScale()),
+				pipOriginY + (pt.y * layout.modelScale())
 		);
 	}
 
-	public static float computeParallaxOffsetX(AnimationState animState) {
-		return -Mth.sin(animState.parallaxYawDeg() * Mth.DEG_TO_RAD) * FRONT_SURFACE_Z_PX;
-	}
+	public static ProjectedBounds projectGeoBoxToScreen(
+			DeviceLayout layout,
+			float geoX0,
+			float geoY0,
+			float geoZ0,
+			float geoX1,
+			float geoY1,
+			float geoZ1
+	) {
+		float minX = Float.POSITIVE_INFINITY;
+		float minY = Float.POSITIVE_INFINITY;
+		float maxX = Float.NEGATIVE_INFINITY;
+		float maxY = Float.NEGATIVE_INFINITY;
 
-	public static float computeParallaxOffsetY(AnimationState animState) {
-		return Mth.sin(animState.parallaxPitchDeg() * Mth.DEG_TO_RAD) * FRONT_SURFACE_Z_PX;
+		Vector3f tmp = new Vector3f();
+		float[] xs = {geoX0, geoX1};
+		float[] ys = {geoY0, geoY1};
+		float[] zs = {geoZ0, geoZ1};
+		float scale = layout.modelScale();
+		float pipCenterX = (layout.pipX0() + layout.pipX1()) * 0.5F;
+		float pipOriginY = layout.pipY0() + (layout.pipY1() - layout.pipY0()) * PIP_ORIGIN_Y_RATIO;
+
+		for (float gx : xs) {
+			for (float gy : ys) {
+				for (float gz : zs) {
+					tmp.set(-gx / 16.0F, gy / 16.0F, gz / 16.0F);
+					STATIC_ISOMETRIC_MATRIX.transformPosition(tmp);
+					float sx = pipCenterX + (tmp.x * scale);
+					float sy = pipOriginY + (tmp.y * scale);
+					if (sx < minX) minX = sx;
+					if (sx > maxX) maxX = sx;
+					if (sy < minY) minY = sy;
+					if (sy > maxY) maxY = sy;
+				}
+			}
+		}
+		return new ProjectedBounds(minX, minY, maxX, maxY);
 	}
 
 	public static String mapKeyIdToBoneName(String keyId) {
@@ -127,6 +172,9 @@ public final class HandheldRadioModelRenderer {
 			DeviceLayout layout,
 			boolean isPowered,
 			boolean isTransmitting,
+			float handSideSign,
+			float focusProgress,
+			LcdContent lcdContent,
 			AnimationState animationState
 	) {
 		ScreenRectangle scissor = graphics.scissorStack.peek();
@@ -134,8 +182,7 @@ public final class HandheldRadioModelRenderer {
 		float qKeyDepth = Math.round(animationState.keyPressDepth() * 25.0F) / 25.0F;
 		float qPttDepth = Math.round(animationState.pttPressDepth() * 25.0F) / 25.0F;
 		float qAntExt = Math.round(animationState.antennaExtension() * 40.0F) / 40.0F;
-		float qPitch = Math.round(animationState.parallaxPitchDeg() * 10.0F) / 10.0F;
-		float qYaw = Math.round(animationState.parallaxYawDeg() * 10.0F) / 10.0F;
+		float qFocus = Math.round(Mth.clamp(focusProgress, 0.0F, 1.0F) * 100.0F) / 100.0F;
 		float swayPhase = isTransmitting ? ((System.currentTimeMillis() % 4000L) / 1000.0F) : 0.0F;
 		float qSway = Math.round(swayPhase * 20.0F) / 20.0F;
 
@@ -149,14 +196,15 @@ public final class HandheldRadioModelRenderer {
 				qPttDepth,
 				depressedBone,
 				qKeyDepth,
-				qPitch,
-				qYaw,
+				handSideSign,
+				qFocus,
 				qSway,
+				lcdContent,
 				layout.pipX0(),
 				layout.pipY0(),
 				layout.pipX1(),
 				layout.pipY1(),
-				PIP_MODEL_SCALE,
+				layout.modelScale(),
 				scissor,
 				PictureInPictureRenderState.getBounds(
 						layout.pipX0(),
@@ -168,9 +216,32 @@ public final class HandheldRadioModelRenderer {
 		));
 	}
 
-	/**
-	 * Mutable interactive 3D state driving the GeckoLib inspection model.
-	 */
+	public record ProjectedBounds(float minX, float minY, float maxX, float maxY) {
+		public boolean contains(double mx, double my) {
+			return mx >= this.minX && mx <= this.maxX && my >= this.minY && my <= this.maxY;
+		}
+
+		public int centerX() {
+			return Math.round((this.minX + this.maxX) * 0.5F);
+		}
+
+		public int centerY() {
+			return Math.round((this.minY + this.maxY) * 0.5F);
+		}
+	}
+
+	public record LcdContent(
+			String topLeft,
+			int topLeftColor,
+			String topRight,
+			int topRightColor,
+			String midFrequency,
+			int midFrequencyColor,
+			String bottomBuffer,
+			int bottomColor
+	) {
+	}
+
 	public static final class AnimationState {
 		private String depressedKeyId = "";
 		private float keyPressDepth = 0.0F;
@@ -181,16 +252,11 @@ public final class HandheldRadioModelRenderer {
 		private float antennaExtension = 1.0F;
 		private float targetAntennaExtension = 1.0F;
 		private boolean draggingAntenna = false;
-		private float parallaxPitchDeg = 0.0F;
-		private float parallaxYawDeg = 0.0F;
 		private long lastUpdateNanos = System.nanoTime();
 
-		public void triggerKeyPress(String keyId, float dialStepDeg) {
+		public void triggerKeyPress(String keyId) {
 			this.depressedKeyId = Objects.requireNonNullElse(keyId, "");
 			this.keyPressDepth = 1.0F;
-			if (dialStepDeg != 0.0F) {
-				this.targetDialKnobAngleDeg = Mth.wrapDegrees(this.targetDialKnobAngleDeg + dialStepDeg);
-			}
 		}
 
 		public void stepDialAngle(float deltaDeg) {
@@ -218,26 +284,13 @@ public final class HandheldRadioModelRenderer {
 			this.targetAntennaExtension = this.antennaExtension;
 		}
 
-		public void updateFrame(int mouseX, int mouseY, DeviceLayout layout, int screenWidth, int screenHeight) {
+		public void updateFrame() {
 			long now = System.nanoTime();
 			float dt = Mth.clamp((now - this.lastUpdateNanos) / 1_000_000_000.0F, 0.0F, 0.1F);
 			this.lastUpdateNanos = now;
 
-			// ±6° mouse parallax relative to device center
-			float normX = screenWidth > 0
-					? Mth.clamp((mouseX - layout.centerX()) / (screenWidth * 0.38F), -1.0F, 1.0F)
-					: 0.0F;
-			float normY = screenHeight > 0
-					? Mth.clamp((mouseY - layout.bodyCenterY()) / (screenHeight * 0.38F), -1.0F, 1.0F)
-					: 0.0F;
-			float targetYaw = -normX * MAX_PARALLAX_DEG;
-			float targetPitch = normY * MAX_PARALLAX_DEG;
-			float parallaxBlend = Math.min(1.0F, dt * 12.0F);
-			this.parallaxYawDeg += (targetYaw - this.parallaxYawDeg) * parallaxBlend;
-			this.parallaxPitchDeg += (targetPitch - this.parallaxPitchDeg) * parallaxBlend;
-
 			if (this.keyPressDepth > 0.0F) {
-				this.keyPressDepth = Math.max(0.0F, this.keyPressDepth - dt * 7.2F);
+				this.keyPressDepth = Math.max(0.0F, this.keyPressDepth - dt * 7.5F);
 				if (this.keyPressDepth == 0.0F) {
 					this.depressedKeyId = "";
 				}
@@ -286,31 +339,12 @@ public final class HandheldRadioModelRenderer {
 		public float antennaExtension() {
 			return this.antennaExtension;
 		}
-
-		public float parallaxPitchDeg() {
-			return this.parallaxPitchDeg;
-		}
-
-		public float parallaxYawDeg() {
-			return this.parallaxYawDeg;
-		}
 	}
 
 	public record DeviceLayout(
 			int centerX,
-			int bodyCenterY,
-			int bodyLeft,
-			int bodyTop,
-			int bodyWidth,
-			int bodyHeight,
-			int lcdX,
-			int lcdY,
-			int lcdWidth,
-			int lcdHeight,
-			int keypadX,
-			int keypadY,
-			int keypadWidth,
-			int keypadHeight,
+			int originY,
+			float modelScale,
 			int pipX0,
 			int pipY0,
 			int pipX1,
@@ -326,9 +360,10 @@ public final class HandheldRadioModelRenderer {
 			float pttPressDepth,
 			String depressedKeyBone,
 			float keyPressDepth,
-			float parallaxPitchDeg,
-			float parallaxYawDeg,
+			float handSideSign,
+			float focusProgress,
 			float swayPhase,
+			LcdContent lcdContent,
 			int x0,
 			int y0,
 			int x1,
@@ -346,7 +381,6 @@ public final class HandheldRadioModelRenderer {
 
 		@Override
 		public void adjustRenderPose(RenderPassInfo<GeoRenderState> renderPassInfo) {
-			// Keep model centered at (0, 0, 0) in PiP space instead of shifting by (0.5, 0.51, 0.5)
 		}
 
 		@Override
@@ -384,12 +418,19 @@ public final class HandheldRadioModelRenderer {
 				return;
 			}
 
-			Minecraft.getInstance().gameRenderer.lighting().setupFor(Lighting.Entry.ENTITY_IN_UI);
+			Minecraft.getInstance().gameRenderer.lighting().setupFor(Lighting.Entry.ITEMS_3D);
 
-			// Orient GeckoLib (+Y up, -Z front) cleanly into GUI PiP space with ±6° live mouse parallax
+			float focus = Mth.clamp(state.focusProgress(), 0.0F, 1.0F);
+			float invFocus = 1.0F - focus;
+			if (invFocus > 0.001F) {
+				poseStack.translate(state.handSideSign() * 0.28F * invFocus, 0.92F * invFocus, 0.0F);
+				float s = Mth.lerp(focus, 0.82F, 1.0F);
+				poseStack.scale(s, s, s);
+			}
+
 			poseStack.rotateDegrees(Axis.ZP, 180.0F);
-			poseStack.rotateDegrees(Axis.XP, state.parallaxPitchDeg());
-			poseStack.rotateDegrees(Axis.YP, state.parallaxYawDeg());
+			poseStack.rotateDegrees(Axis.XP, ISOMETRIC_PITCH_DEG + (6.0F * invFocus));
+			poseStack.rotateDegrees(Axis.YP, ISOMETRIC_YAW_DEG);
 
 			RenderPassInfo.BoneUpdater<GeoRenderState> boneUpdater = (renderPassInfo, snapshots) -> {
 				snapshots.ifPresent("led_on", bone -> bone.skipRender(!state.isPowered()));
@@ -400,15 +441,16 @@ public final class HandheldRadioModelRenderer {
 				);
 
 				snapshots.ifPresent("ptt_button", bone ->
-						bone.setTranslateX(-0.52F * state.pttPressDepth())
+						bone.setTranslateX(0.55F * state.pttPressDepth())
 				);
 
+				float ext = Mth.clamp(state.antennaExtension(), 0.0F, 1.0F);
+				snapshots.ifPresent("antenna_seg1", seg1 -> seg1.setTranslateY(-1.80F * (1.0F - ext)));
+				snapshots.ifPresent("antenna_seg2", seg2 -> seg2.setTranslateY(-2.20F * (1.0F - ext)));
+
 				snapshots.ifPresent("antenna", bone -> {
-					float ext = Mth.clamp(state.antennaExtension(), 0.0F, 1.0F);
-					bone.setTranslateY(-4.4F * (1.0F - ext));
-					bone.setScaleY(Mth.lerp(ext, 0.30F, 1.0F));
 					if (state.isTransmitting() && ext > 0.6F) {
-						float sway = Mth.sin(state.swayPhase() * Mth.TWO_PI) * 1.8F * Mth.DEG_TO_RAD;
+						float sway = Mth.sin(state.swayPhase() * Mth.TWO_PI) * 1.5F * Mth.DEG_TO_RAD;
 						bone.setRotZ(sway);
 					}
 				});
@@ -416,7 +458,7 @@ public final class HandheldRadioModelRenderer {
 				for (String keyBone : ALL_KEY_BONES) {
 					boolean pressed = keyBone.equals(state.depressedKeyBone()) && state.keyPressDepth() > 0.01F;
 					snapshots.ifPresent(keyBone, bone ->
-							bone.setTranslateZ(pressed ? (0.42F * state.keyPressDepth()) : 0.0F)
+							bone.setTranslateZ(pressed ? (0.52F * state.keyPressDepth()) : 0.0F)
 					);
 				}
 			};
@@ -431,6 +473,145 @@ public final class HandheldRadioModelRenderer {
 					0.0F,
 					boneUpdater
 			);
+
+			Font font = Minecraft.getInstance().font;
+			OrderedSubmitNodeCollector textLayer = submitNodeCollector.order(1);
+			render3DLcdSurface(poseStack, textLayer, font, state.lcdContent());
+		}
+
+		private static void render3DLcdSurface(
+				PoseStack poseStack,
+				OrderedSubmitNodeCollector textLayer,
+				Font font,
+				LcdContent lcd
+		) {
+			if (lcd == null) {
+				return;
+			}
+			final float lcdFrontZ = -1.81F;
+			final float leftX = -3.14F;
+			final float rightX = 3.14F;
+
+			// Compact LCD typography so the backlit display glass remains clearly visible
+			submitAligned3DSurfaceText(
+					poseStack, textLayer, font,
+					Component.literal(lcd.topLeft()).getVisualOrderText(),
+					leftX, 6.84F, lcdFrontZ, 2.55F, 0.43F, lcd.topLeftColor(), false
+			);
+			submitAligned3DSurfaceText(
+					poseStack, textLayer, font,
+					Component.literal(lcd.topRight()).getVisualOrderText(),
+					rightX, 6.84F, lcdFrontZ, 3.35F, 0.43F, lcd.topRightColor(), true
+			);
+
+			submitAligned3DSurfaceText(
+					poseStack, textLayer, font,
+					Component.literal(lcd.midFrequency()).getVisualOrderText(),
+					leftX, 5.92F, lcdFrontZ, 5.60F, 0.54F, lcd.midFrequencyColor(), false
+			);
+
+			submitAligned3DSurfaceText(
+					poseStack, textLayer, font,
+					Component.literal(lcd.bottomBuffer()).getVisualOrderText(),
+					leftX, 5.02F, lcdFrontZ, 5.95F, 0.50F, lcd.bottomColor(), false
+			);
+		}
+	}
+
+	public static void submitAligned3DSurfaceText(
+			PoseStack poseStack,
+			OrderedSubmitNodeCollector textLayer,
+			Font font,
+			FormattedCharSequence seq,
+			float anchorGeoX,
+			float centerGeoY,
+			float frontGeoZ,
+			float maxWidthGeo,
+			float desiredHeightGeo,
+			int color,
+			boolean rightAlign
+	) {
+		int pixelW = Math.max(1, font.width(seq));
+		float pixelToGeo = Math.min(desiredHeightGeo / 8.0F, maxWidthGeo / (float) pixelW);
+		float s = pixelToGeo / 16.0F;
+
+		poseStack.pushPose();
+		poseStack.translate(-anchorGeoX / 16.0F, centerGeoY / 16.0F, frontGeoZ / 16.0F);
+		poseStack.rotateDegrees(Axis.ZP, 180.0F);
+		poseStack.scale(s, s, s);
+		float drawX = rightAlign ? -pixelW : 0.0F;
+		textLayer.submitText(
+				poseStack,
+				drawX,
+				-4.0F,
+				seq,
+				false,
+				Font.DisplayMode.NORMAL,
+				FULL_BRIGHT_LIGHT,
+				color,
+				0,
+				0
+		);
+		poseStack.popPose();
+	}
+
+	public static void extractAntennaHoverArrows(
+			GuiGraphicsExtractor graphics,
+			ProjectedBounds antennaBounds,
+			boolean antennaExtended
+	) {
+		int cx = antennaBounds.centerX();
+		int bob = Math.round(Mth.sin((System.currentTimeMillis() % 1100L) / 1100.0F * Mth.TWO_PI) * 1.4F);
+		int centerGapY = Math.max(12, Math.round(antennaBounds.minY()) - 7);
+
+		int upColor = antennaExtended ? 0xCCFF8E26 : 0xFFFFA438;
+		int downColor = antennaExtended ? 0xFFFFA438 : 0xCCFF8E26;
+		int shadow = 0xB0120B05;
+
+		drawUpTriangle(graphics, cx + 1, centerGapY - 5 - bob + 1, shadow);
+		drawUpTriangle(graphics, cx, centerGapY - 5 - bob, upColor);
+
+		drawDownTriangle(graphics, cx + 1, centerGapY + 4 + bob + 1, shadow);
+		drawDownTriangle(graphics, cx, centerGapY + 4 + bob, downColor);
+	}
+
+	public static void extractDialHoverArrows(GuiGraphicsExtractor graphics, ProjectedBounds dialBounds) {
+		int cy = dialBounds.centerY();
+		int bob = Math.round(Mth.sin((System.currentTimeMillis() % 1100L) / 1100.0F * Mth.TWO_PI) * 1.4F);
+		int leftTipX = Math.round(dialBounds.minX()) - 6 - bob;
+		int rightTipX = Math.round(dialBounds.maxX()) + 6 + bob;
+
+		int orange = 0xFFFF9E32;
+		int shadow = 0xB0120B05;
+
+		drawLeftTriangle(graphics, leftTipX + 1, cy + 1, shadow);
+		drawLeftTriangle(graphics, leftTipX, cy, orange);
+
+		drawRightTriangle(graphics, rightTipX + 1, cy + 1, shadow);
+		drawRightTriangle(graphics, rightTipX, cy, orange);
+	}
+
+	private static void drawUpTriangle(GuiGraphicsExtractor graphics, int cx, int tipY, int color) {
+		for (int i = 0; i < 4; i++) {
+			graphics.fill(cx - i, tipY + i, cx + i + 1, tipY + i + 1, color);
+		}
+	}
+
+	private static void drawDownTriangle(GuiGraphicsExtractor graphics, int cx, int tipY, int color) {
+		for (int i = 0; i < 4; i++) {
+			graphics.fill(cx - i, tipY - i, cx + i + 1, tipY - i + 1, color);
+		}
+	}
+
+	private static void drawLeftTriangle(GuiGraphicsExtractor graphics, int tipX, int cy, int color) {
+		for (int i = 0; i < 4; i++) {
+			graphics.fill(tipX + i, cy - i, tipX + i + 1, cy + i + 1, color);
+		}
+	}
+
+	private static void drawRightTriangle(GuiGraphicsExtractor graphics, int tipX, int cy, int color) {
+		for (int i = 0; i < 4; i++) {
+			graphics.fill(tipX - i, cy - i, tipX - i + 1, cy + i + 1, color);
 		}
 	}
 }

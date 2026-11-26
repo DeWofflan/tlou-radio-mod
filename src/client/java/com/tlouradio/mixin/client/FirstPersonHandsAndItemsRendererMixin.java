@@ -4,6 +4,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import com.tlouradio.client.RadioClientInputHandler;
 import com.tlouradio.client.gui.HandheldRadioScreen;
+import com.tlouradio.client.gui.RadioBaseBoxScreen;
 import com.tlouradio.item.HandheldRadioItem;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.FirstPersonHandsAndItemsRenderer;
@@ -16,7 +17,9 @@ import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.HumanoidArm;
+import net.minecraft.world.entity.player.PlayerModelType;
 import net.minecraft.world.item.ItemStack;
+import org.joml.Quaternionf;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -26,19 +29,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(FirstPersonHandsAndItemsRenderer.class)
 public abstract class FirstPersonHandsAndItemsRendererMixin {
 	@Shadow
-	private void renderPlayerArm(
+	private void renderPlayerHand(
 			PoseStack poseStack,
 			SubmitNodeCollector submitNodeCollector,
 			int packedLight,
-			float equipProgress,
-			float swingProgress,
 			HumanoidArm arm,
 			PlayerRenderState playerState
 	) {
-	}
-
-	@Shadow
-	private void applyItemArmTransform(PoseStack poseStack, HumanoidArm arm, float equipProgress) {
 	}
 
 	@Inject(method = "submitHandsWithItems", at = @At("HEAD"), cancellable = true)
@@ -50,7 +47,8 @@ public abstract class FirstPersonHandsAndItemsRendererMixin {
 			FirstPersonHandsAndItemsRenderState handsState,
 			CallbackInfo ci
 	) {
-		if (Minecraft.getInstance().gui.screen() instanceof HandheldRadioScreen) {
+		var activeScreen = Minecraft.getInstance().gui.screen();
+		if (activeScreen instanceof HandheldRadioScreen || activeScreen instanceof RadioBaseBoxScreen) {
 			ci.cancel();
 		}
 	}
@@ -86,55 +84,71 @@ public abstract class FirstPersonHandsAndItemsRendererMixin {
 		boolean isMainHand = (hand == InteractionHand.MAIN_HAND);
 		HumanoidArm arm = isMainHand ? avatarState.mainArm : avatarState.mainArm.getOpposite();
 		float armSign = (arm == HumanoidArm.RIGHT) ? 1.0F : -1.0F;
+		boolean slimSkin = avatarState.skin != null && avatarState.skin.model() == PlayerModelType.SLIM;
+		float armCubeCenterX = -armSign * (slimSkin ? 0.5F : 1.0F);
 
 		RadioClientInputHandler.updateRenderAnimationFrame();
 		float flick = RadioClientInputHandler.getFlickProgress(hand);
 		float ptt = RadioClientInputHandler.getPttRaiseProgress();
 
+		// Single shared hand-grip PoseStack so the player's hand/arm and the 3D radio are
+		// rigidly locked to the exact same palm axis in idle, equip, wrist-flick, PTT, and both hands.
 		poseStack.pushPose();
+		poseStack.translate(0.0F, equipProgress * -0.6F, 0.0F);
+		poseStack.translate(armSign * 0.42F, -0.49F, -0.75F);
 
-		// 1. SmoothPTT raise-to-mouth transition
+		// 1. Natural, relaxed inward turn & raise toward the player's mouth/ear during PTT (exact mirror for left hand)
 		if (ptt > 0.001F) {
 			float smoothPtt = ptt * ptt * (3.0F - 2.0F * ptt);
-			poseStack.translate(-armSign * 0.24F * smoothPtt, 0.14F * smoothPtt, 0.14F * smoothPtt);
-			poseStack.rotateDegrees(Axis.XP, 11.0F * smoothPtt);
-			poseStack.rotateDegrees(Axis.YP, -armSign * 8.0F * smoothPtt);
-			poseStack.rotateDegrees(Axis.ZP, armSign * 7.5F * smoothPtt);
+			poseStack.translate(-armSign * 0.15F * smoothPtt, 0.105F * smoothPtt, 0.085F * smoothPtt);
+			poseStack.rotateDegrees(Axis.YP, -armSign * 16.5F * smoothPtt);
+			poseStack.rotateDegrees(Axis.ZP, armSign * 10.5F * smoothPtt);
+			poseStack.rotateDegrees(Axis.XP, 9.0F * smoothPtt);
 		}
 
-		// 2. Flip-open wrist flick curve (cock back -> snap forward -> settle)
+		// 2. Flip-open wrist flick curve around the shared wrist/palm pivot
 		if (flick > 0.001F) {
 			float wristPitch;
 			float wristLift;
 			if (flick < 0.28F) {
 				float t = flick / 0.28F;
-				wristPitch = Mth.sin(t * Mth.HALF_PI) * 24.0F;
-				wristLift = -0.05F * t;
+				wristPitch = Mth.sin(t * Mth.HALF_PI) * 20.0F;
+				wristLift = -0.035F * t;
 			} else if (flick < 0.62F) {
 				float t = (flick - 0.28F) / 0.34F;
-				wristPitch = Mth.lerp(t, 24.0F, -14.0F);
-				wristLift = Mth.lerp(t, -0.05F, 0.04F);
+				wristPitch = Mth.lerp(t, 20.0F, -11.0F);
+				wristLift = Mth.lerp(t, -0.035F, 0.025F);
 			} else {
 				float t = (flick - 0.62F) / 0.38F;
-				wristPitch = Mth.lerp(t, -14.0F, 0.0F);
-				wristLift = Mth.lerp(t, 0.04F, 0.0F);
+				wristPitch = Mth.lerp(t, -11.0F, 0.0F);
+				wristLift = Mth.lerp(t, 0.025F, 0.0F);
 			}
 			poseStack.translate(0.0F, wristLift, 0.0F);
 			poseStack.rotateDegrees(Axis.XP, wristPitch);
-			poseStack.rotateDegrees(Axis.ZP, -armSign * wristPitch * 0.22F);
+			poseStack.rotateDegrees(Axis.ZP, -armSign * wristPitch * 0.18F);
 		}
 
-		// 3. Render player's own skin arm gripping the lower chassis of the handheld radio
-		poseStack.pushPose();
-		poseStack.translate(armSign * -0.08F, -0.14F, -0.10F);
-		poseStack.rotateDegrees(Axis.XP, 8.0F);
-		poseStack.rotateDegrees(Axis.ZP, armSign * -6.0F);
-		renderPlayerArm(poseStack, submitNodeCollector, packedLight, equipProgress, 0.0F, arm, playerState);
-		poseStack.popPose();
+		// 3. Shared ergonomic 1st-person resting orientation
+		poseStack.rotateDegrees(Axis.YP, -armSign * 5.0F);
+		poseStack.rotateDegrees(Axis.ZP, armSign * 3.0F);
+		poseStack.rotateDegrees(Axis.XP, 7.0F);
 
-		// 4. Submit the 3D GeckoLib handheld radio held in the palm
+		// 4. Render player's hand/forearm algebraically centered on the radio's lower grip (wide 4px & slim 3px)
+		if (!avatarState.isInvisible) {
+			poseStack.pushPose();
+			poseStack.translate(armSign * 0.036F, -0.105F, -0.085F);
+			poseStack.rotateDegrees(Axis.ZP, -armSign * 11.0F);
+			poseStack.rotateDegrees(Axis.XP, -38.0F);
+			poseStack.rotateDegrees(Axis.YP, 180.0F);
+			poseStack.translate(-armCubeCenterX / 16.0F, -10.0F / 16.0F, 0.0F);
+			poseStack.rotate(new Quaternionf().rotationZ(-armSign * 0.1F));
+			poseStack.translate((armSign * 5.0F) / 16.0F, -2.0F / 16.0F, 0.0F);
+			renderPlayerHand(poseStack, submitNodeCollector, packedLight, arm, playerState);
+			poseStack.popPose();
+		}
+
+		// 5. Render the 3D GeckoLib handheld radio directly on the same palm origin
 		poseStack.pushPose();
-		applyItemArmTransform(poseStack, arm, equipProgress);
 		ItemStackRenderState itemRenderState = isMainHand
 				? handsState.mainHandRenderState
 				: handsState.offHandRenderState;

@@ -23,7 +23,9 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.HumanoidArm;
 import net.minecraft.world.item.ItemStack;
+import org.joml.Vector2f;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -32,8 +34,8 @@ import java.util.UUID;
 
 public class HandheldRadioScreen extends Screen {
 	private static final long DIAL_SYNC_DEBOUNCE_MS = 150L;
-	private static final double DIAL_PIXELS_PER_DETENT = 9.0D;
-	private static final double ANTENNA_DRAG_RANGE_PX = 46.0D;
+	private static final double DIAL_PIXELS_PER_DETENT = 10.0D;
+	private static final double ANTENNA_DRAG_RANGE_PX = 42.0D;
 
 	private enum InputMode {
 		FREQUENCY,
@@ -57,14 +59,26 @@ public class HandheldRadioScreen extends Screen {
 
 	private record KeySpec(
 			String keyId,
+			String boneName,
 			Component label,
-			int baseX,
-			int baseY,
-			int width,
-			int height,
+			float geoX0,
+			float geoY0,
+			float geoX1,
+			float geoY1,
 			KeyRole role,
 			Runnable action
 	) {
+		float centerGeoX() {
+			return (this.geoX0 + this.geoX1) * 0.5F;
+		}
+
+		float centerGeoY() {
+			return (this.geoY0 + this.geoY1) * 0.5F;
+		}
+
+		float widthGeo() {
+			return this.geoX1 - this.geoX0;
+		}
 	}
 
 	private final InteractionHand hand;
@@ -83,7 +97,6 @@ public class HandheldRadioScreen extends Screen {
 	private boolean passcodeModified = false;
 	private int invalidFlashTicks = 0;
 
-	// Interactive 3D manipulation state
 	private DragTarget activeDragTarget = DragTarget.NONE;
 	private double antennaDragStartMouseY = 0.0D;
 	private float antennaDragStartRatio = 1.0F;
@@ -92,6 +105,7 @@ public class HandheldRadioScreen extends Screen {
 	private long lastDialStepTimeMs = 0L;
 
 	private final List<KeySpec> keySpecs = new ArrayList<>(14);
+	private final RadioInspectionTransition transition = new RadioInspectionTransition();
 	private final HandheldRadioModelRenderer.AnimationState animationState =
 			new HandheldRadioModelRenderer.AnimationState();
 	private HandheldRadioModelRenderer.DeviceLayout layout;
@@ -109,7 +123,6 @@ public class HandheldRadioScreen extends Screen {
 		this.activeSavedFrequency = initialState.frequency();
 		this.activeNetworkId = initialState.networkId();
 
-		// PIN Masking Security: never expose existing/paired passcode in any plaintext UI buffer
 		this.initiallyPaired = initialState.networkId().isPresent();
 		this.hadInitialPasscode = !initialState.passcode().isEmpty();
 		this.preservedUnmodifiedFreePasscode = this.initiallyPaired ? "" : initialState.passcode();
@@ -121,84 +134,63 @@ public class HandheldRadioScreen extends Screen {
 		this.animationState.setInitialDialAngle(
 				HandheldRadioGeoItemRenderer.computeDialAngleRad(initialState.frequency()) * Mth.RAD_TO_DEG
 		);
+
+		buildStatic3DKeySpecs();
 	}
 
 	@Override
 	protected void init() {
 		this.layout = HandheldRadioModelRenderer.computeLayout(this.width, this.height);
-		rebuildPhysicalKeySpecs(this.layout);
 	}
 
-	private void rebuildPhysicalKeySpecs(HandheldRadioModelRenderer.DeviceLayout d) {
+	private void buildStatic3DKeySpecs() {
 		this.keySpecs.clear();
 
-		int startX = d.keypadX();
-		int startY = d.keypadY();
+		float dW = 1.45F;
+		float fW = 2.35F;
+		float rH = 1.68F;
 
-		int digitW = 20;
-		int funcW = 40;
-		int rowH = 22;
-		int gapX = 2;
-		int gapY = 3;
+		float c0 = -3.65F;
+		float c1 = -2.00F;
+		float c2 = -0.35F;
+		float c3 = 1.30F;
 
-		int col0 = startX;
-		int col1 = col0 + digitW + gapX;
-		int col2 = col1 + digitW + gapX;
-		int col3 = col2 + digitW + gapX;
+		float r0 = -1.63F;
+		float r1 = -3.57F;
+		float r2 = -5.51F;
+		float r3 = -7.45F;
 
-		int row0 = startY;
-		int row1 = row0 + rowH + gapY;
-		int row2 = row1 + rowH + gapY;
-		int row3 = row2 + rowH + gapY;
+		addKey("1", "key_1", Component.literal("1"), c0, r0, dW, rH, KeyRole.DIGIT, () -> handleDigit('1'));
+		addKey("2", "key_2", Component.literal("2"), c1, r0, dW, rH, KeyRole.DIGIT, () -> handleDigit('2'));
+		addKey("3", "key_3", Component.literal("3"), c2, r0, dW, rH, KeyRole.DIGIT, () -> handleDigit('3'));
+		addKey("MODE", "key_mode", Component.translatable("gui.tlouradio.handheld.key_mode"), c3, r0, fW, rH, KeyRole.MODE, this::toggleInputMode);
 
-		// Row 0: 1, 2, 3, FRQ/PIN
-		this.keySpecs.add(new KeySpec("1", Component.literal("1"), col0, row0, digitW, rowH, KeyRole.DIGIT, () -> handleDigit('1')));
-		this.keySpecs.add(new KeySpec("2", Component.literal("2"), col1, row0, digitW, rowH, KeyRole.DIGIT, () -> handleDigit('2')));
-		this.keySpecs.add(new KeySpec("3", Component.literal("3"), col2, row0, digitW, rowH, KeyRole.DIGIT, () -> handleDigit('3')));
-		this.keySpecs.add(new KeySpec(
-				"MODE",
-				Component.translatable("gui.tlouradio.handheld.key_mode"),
-				col3,
-				row0,
-				funcW,
-				rowH,
-				KeyRole.MODE,
-				this::toggleInputMode
-		));
+		addKey("4", "key_4", Component.literal("4"), c0, r1, dW, rH, KeyRole.DIGIT, () -> handleDigit('4'));
+		addKey("5", "key_5", Component.literal("5"), c1, r1, dW, rH, KeyRole.DIGIT, () -> handleDigit('5'));
+		addKey("6", "key_6", Component.literal("6"), c2, r1, dW, rH, KeyRole.DIGIT, () -> handleDigit('6'));
+		addKey("DEL", "key_del", Component.translatable("gui.tlouradio.handheld.key_delete"), c3, r1, fW, rH, KeyRole.DELETE, this::handleDelete);
 
-		// Row 1: 4, 5, 6, Sil
-		this.keySpecs.add(new KeySpec("4", Component.literal("4"), col0, row1, digitW, rowH, KeyRole.DIGIT, () -> handleDigit('4')));
-		this.keySpecs.add(new KeySpec("5", Component.literal("5"), col1, row1, digitW, rowH, KeyRole.DIGIT, () -> handleDigit('5')));
-		this.keySpecs.add(new KeySpec("6", Component.literal("6"), col2, row1, digitW, rowH, KeyRole.DIGIT, () -> handleDigit('6')));
-		this.keySpecs.add(new KeySpec(
-				"DEL",
-				Component.translatable("gui.tlouradio.handheld.key_delete"),
-				col3,
-				row1,
-				funcW,
-				rowH,
-				KeyRole.DELETE,
-				this::handleDelete
-		));
+		addKey("7", "key_7", Component.literal("7"), c0, r2, dW, rH, KeyRole.DIGIT, () -> handleDigit('7'));
+		addKey("8", "key_8", Component.literal("8"), c1, r2, dW, rH, KeyRole.DIGIT, () -> handleDigit('8'));
+		addKey("9", "key_9", Component.literal("9"), c2, r2, dW, rH, KeyRole.DIGIT, () -> handleDigit('9'));
+		addKey("ENT", "key_ent", Component.translatable("gui.tlouradio.handheld.key_enter"), c3, r3, fW, 3.62F, KeyRole.ENTER, this::handleSubmit);
 
-		// Row 2: 7, 8, 9 + Tall Enter spanning Row 2 & Row 3
-		this.keySpecs.add(new KeySpec("7", Component.literal("7"), col0, row2, digitW, rowH, KeyRole.DIGIT, () -> handleDigit('7')));
-		this.keySpecs.add(new KeySpec("8", Component.literal("8"), col1, row2, digitW, rowH, KeyRole.DIGIT, () -> handleDigit('8')));
-		this.keySpecs.add(new KeySpec("9", Component.literal("9"), col2, row2, digitW, rowH, KeyRole.DIGIT, () -> handleDigit('9')));
-		this.keySpecs.add(new KeySpec(
-				"ENT",
-				Component.translatable("gui.tlouradio.handheld.key_enter"),
-				col3,
-				row2,
-				funcW,
-				rowH * 2 + gapY,
-				KeyRole.ENTER,
-				this::handleSubmit
-		));
+		addKey("0", "key_0", Component.literal("0"), c0, r3, 3.10F, rH, KeyRole.DIGIT, () -> handleDigit('0'));
+		addKey(".", "key_dot", Component.literal("."), c2, r3, dW, rH, KeyRole.DOT, this::handleDot);
+	}
 
-		// Row 3: Wide 0 + '.'
-		this.keySpecs.add(new KeySpec("0", Component.literal("0"), col0, row3, digitW * 2 + gapX, rowH, KeyRole.DIGIT, () -> handleDigit('0')));
-		this.keySpecs.add(new KeySpec(".", Component.literal("."), col2, row3, digitW, rowH, KeyRole.DOT, this::handleDot));
+	private void addKey(
+			String keyId,
+			String boneName,
+			Component label,
+			float x0,
+			float y0,
+			float w,
+			float h,
+			KeyRole role,
+			Runnable action
+	) {
+		this.keySpecs.add(new KeySpec(keyId, boneName, label, x0, y0, x0 + w, y0 + h, role, action));
 	}
 
 	@Override
@@ -213,13 +205,13 @@ public class HandheldRadioScreen extends Screen {
 		if (this.minecraft.player == null
 				|| !this.minecraft.player.isAlive()
 				|| this.minecraft.player.isSpectator()) {
-			onClose();
+			forceCloseImmediately();
 			return;
 		}
 
 		ItemStack heldStack = this.minecraft.player.getItemInHand(this.hand);
 		if (heldStack.isEmpty() || !(heldStack.getItem() instanceof HandheldRadioItem)) {
-			onClose();
+			forceCloseImmediately();
 			return;
 		}
 
@@ -237,21 +229,35 @@ public class HandheldRadioScreen extends Screen {
 			this.animationState.setTargetAntennaExtended(this.antennaExtended);
 		}
 
-		boolean pttHeld = RadioClientInputHandler.isPttTransmitting()
-				|| this.activeDragTarget == DragTarget.PTT_BUTTON;
+		boolean pttHeld = !this.transition.isClosing() && this.activeDragTarget == DragTarget.PTT_BUTTON;
 		this.animationState.setPttPressed(pttHeld);
+	}
+
+	private void initiateSmoothClose() {
+		if (this.transition.isClosing()) {
+			return;
+		}
+		flushPendingInteractionsBeforeClose();
+		playMechanicalClick(0.92F, 0.16F);
+		this.transition.startClosing();
+	}
+
+	private void forceCloseImmediately() {
+		flushPendingInteractionsBeforeClose();
+		RadioInspectionTransition.resetGlobalFovImmediately();
+		super.onClose();
+	}
+
+	@Override
+	public void onClose() {
+		initiateSmoothClose();
 	}
 
 	@Override
 	public void removed() {
 		flushPendingInteractionsBeforeClose();
+		RadioInspectionTransition.resetGlobalFovImmediately();
 		super.removed();
-	}
-
-	@Override
-	public void onClose() {
-		flushPendingInteractionsBeforeClose();
-		super.onClose();
 	}
 
 	private void flushPendingInteractionsBeforeClose() {
@@ -267,7 +273,7 @@ public class HandheldRadioScreen extends Screen {
 			return;
 		}
 		long elapsed = System.currentTimeMillis() - this.lastDialStepTimeMs;
-		if (forceNow || (this.activeDragTarget != DragTarget.DIAL_KNOB && elapsed >= DIAL_SYNC_DEBOUNCE_MS) || elapsed >= DIAL_SYNC_DEBOUNCE_MS) {
+		if (forceNow || elapsed >= DIAL_SYNC_DEBOUNCE_MS) {
 			this.pendingDialSync = false;
 			if (RadioStateComponent.isValidFrequency(this.activeSavedFrequency)
 					&& ClientPlayNetworking.canSend(StepRadioDialPayload.TYPE)) {
@@ -278,12 +284,14 @@ public class HandheldRadioScreen extends Screen {
 
 	@Override
 	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+		if (this.transition.isClosing()) {
+			return true;
+		}
 		if (event.button() == InputConstants.MOUSE_BUTTON_LEFT && this.layout != null) {
 			double mx = event.x();
 			double my = event.y();
 
-			// 1. Check 3D Telescopic Antenna drag zone (top-left)
-			if (isOverAntenna(mx, my)) {
+			if (getAntennaHitbox().contains(mx, my)) {
 				this.activeDragTarget = DragTarget.ANTENNA;
 				this.antennaDragStartMouseY = my;
 				this.antennaDragStartRatio = this.animationState.antennaExtension();
@@ -291,28 +299,28 @@ public class HandheldRadioScreen extends Screen {
 				return true;
 			}
 
-			// 2. Check 3D Rotary Dial Knob drag zone (top-right)
-			if (isOverDialKnob(mx, my)) {
+			if (getDialKnobHitbox().contains(mx, my)) {
 				this.activeDragTarget = DragTarget.DIAL_KNOB;
 				this.dialDragResidualPx = 0.0D;
 				playMechanicalClick(1.45F, 0.22F);
 				return true;
 			}
 
-			// 3. Check 3D Side PTT Latch hold zone (upper-left side)
-			if (isOverPttButton(mx, my)) {
+			if (getPttButtonHitbox().contains(mx, my)) {
 				this.activeDragTarget = DragTarget.PTT_BUTTON;
 				this.animationState.setPttPressed(true);
-				RadioClientInputHandler.setScreenPttActive(true);
-				playMechanicalClick(0.95F, 0.32F);
+				if (this.isPowered && this.antennaExtended) {
+					RadioClientInputHandler.setScreenPttActive(true);
+					playMechanicalClick(0.95F, 0.32F);
+				} else {
+					this.invalidFlashTicks = 8;
+					playTactileBeep(0.55F, 0.26F);
+				}
 				return true;
 			}
 
-			// 4. Check 14 protruding 3D physical keycaps (parallax-compensated)
-			float pxOff = HandheldRadioModelRenderer.computeParallaxOffsetX(this.animationState);
-			float pyOff = HandheldRadioModelRenderer.computeParallaxOffsetY(this.animationState);
 			for (KeySpec spec : this.keySpecs) {
-				if (isInsideKey(spec, mx, my, pxOff, pyOff)) {
+				if (getKeyHitbox(spec).contains(mx, my)) {
 					spec.action().run();
 					return true;
 				}
@@ -323,9 +331,11 @@ public class HandheldRadioScreen extends Screen {
 
 	@Override
 	public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
+		if (this.transition.isClosing()) {
+			return true;
+		}
 		if (event.button() == InputConstants.MOUSE_BUTTON_LEFT && this.activeDragTarget != DragTarget.NONE) {
 			if (this.activeDragTarget == DragTarget.ANTENNA) {
-				// Dragging UP (negative deltaY) extends; dragging DOWN (positive deltaY) retracts
 				double totalDeltaY = this.antennaDragStartMouseY - event.y();
 				float liveRatio = Mth.clamp(
 						this.antennaDragStartRatio + (float) (totalDeltaY / ANTENNA_DRAG_RANGE_PX),
@@ -347,10 +357,11 @@ public class HandheldRadioScreen extends Screen {
 
 			if (this.activeDragTarget == DragTarget.DIAL_KNOB) {
 				this.dialDragResidualPx += dragX;
-				int steps = (int) (this.dialDragResidualPx / DIAL_PIXELS_PER_DETENT);
-				if (steps != 0) {
-					this.dialDragResidualPx -= steps * DIAL_PIXELS_PER_DETENT;
-					applyDialFrequencySteps(steps);
+				int detents = (int) (this.dialDragResidualPx / DIAL_PIXELS_PER_DETENT);
+				if (detents != 0) {
+					this.dialDragResidualPx -= detents * DIAL_PIXELS_PER_DETENT;
+					int tenthsPerDetent = event.hasShiftDown() ? 1 : 10;
+					applyDialFrequencyTenths(detents * tenthsPerDetent, detents);
 				}
 				return true;
 			}
@@ -364,6 +375,9 @@ public class HandheldRadioScreen extends Screen {
 
 	@Override
 	public boolean mouseReleased(MouseButtonEvent event) {
+		if (this.transition.isClosing()) {
+			return true;
+		}
 		if (event.button() == InputConstants.MOUSE_BUTTON_LEFT && this.activeDragTarget != DragTarget.NONE) {
 			DragTarget released = this.activeDragTarget;
 			this.activeDragTarget = DragTarget.NONE;
@@ -374,7 +388,7 @@ public class HandheldRadioScreen extends Screen {
 			} else if (released == DragTarget.DIAL_KNOB) {
 				checkDialDebounceFlush(true);
 			} else if (released == DragTarget.PTT_BUTTON) {
-				this.animationState.setPttPressed(RadioClientInputHandler.PTT_KEY.isDown());
+				this.animationState.setPttPressed(false);
 				RadioClientInputHandler.releaseScreenPtt();
 				playMechanicalClick(1.18F, 0.22F);
 			}
@@ -383,11 +397,25 @@ public class HandheldRadioScreen extends Screen {
 		return super.mouseReleased(event);
 	}
 
-	private void applyDialFrequencySteps(int steps) {
+	@Override
+	public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+		if (this.transition.isClosing()) {
+			return true;
+		}
+		if (scrollY != 0.0D && this.layout != null && getDialKnobHitbox().contains(mouseX, mouseY)) {
+			int detents = scrollY > 0.0D ? 1 : -1;
+			int tenthsPerDetent = Minecraft.getInstance().hasShiftDown() ? 1 : 10;
+			applyDialFrequencyTenths(detents * tenthsPerDetent, detents);
+			return true;
+		}
+		return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+	}
+
+	private void applyDialFrequencyTenths(int deltaTenths, int detentCount) {
 		String baseFreq = RadioStateComponent.isValidFrequency(this.frequencyBuffer)
 				? this.frequencyBuffer
 				: this.activeSavedFrequency;
-		String nextFreq = RadioStateComponent.stepFrequencyTenths(baseFreq, steps);
+		String nextFreq = RadioStateComponent.stepFrequencyTenths(baseFreq, deltaTenths);
 		if (nextFreq.equals(this.activeSavedFrequency) && nextFreq.equals(this.frequencyBuffer)) {
 			playMechanicalClick(0.65F, 0.18F);
 			return;
@@ -398,58 +426,37 @@ public class HandheldRadioScreen extends Screen {
 		this.activeNetworkId = Optional.empty();
 		this.inputMode = InputMode.FREQUENCY;
 
-		this.animationState.stepDialAngle(steps * 18.0F);
-		float clickPitch = steps > 0 ? 1.62F : 1.38F;
+		this.animationState.stepDialAngle(detentCount * 18.0F);
+		float clickPitch = deltaTenths > 0 ? 1.62F : 1.38F;
 		playMechanicalClick(clickPitch, 0.28F);
 
 		this.pendingDialSync = true;
 		this.lastDialStepTimeMs = System.currentTimeMillis();
 	}
 
-	private boolean isOverAntenna(double mx, double my) {
-		if (this.layout == null) {
-			return false;
-		}
-		float px = HandheldRadioModelRenderer.computeParallaxOffsetX(this.animationState);
-		float py = HandheldRadioModelRenderer.computeParallaxOffsetY(this.animationState);
-		double x0 = this.layout.centerX() - 54 + px;
-		double x1 = this.layout.centerX() - 28 + px;
-		double topExtent = Mth.lerp(this.animationState.antennaExtension(), 26.0F, 76.0F);
-		double y0 = this.layout.bodyTop() - topExtent + py;
-		double y1 = this.layout.bodyTop() + 4 + py;
-		return mx >= x0 && mx <= x1 && my >= y0 && my <= y1;
+	private HandheldRadioModelRenderer.ProjectedBounds getAntennaHitbox() {
+		float maxTopY = Mth.lerp(this.animationState.antennaExtension(), 11.9F, 15.9F);
+		return HandheldRadioModelRenderer.projectGeoBoxToScreen(
+				this.layout, -3.8F, 8.8F, -0.9F, -1.9F, maxTopY, 0.9F
+		);
 	}
 
-	private boolean isOverDialKnob(double mx, double my) {
-		if (this.layout == null) {
-			return false;
-		}
-		float px = HandheldRadioModelRenderer.computeParallaxOffsetX(this.animationState);
-		float py = HandheldRadioModelRenderer.computeParallaxOffsetY(this.animationState);
-		double x0 = this.layout.centerX() + 22 + px;
-		double x1 = this.layout.centerX() + 52 + px;
-		double y0 = this.layout.bodyTop() - 26 + py;
-		double y1 = this.layout.bodyTop() + 4 + py;
-		return mx >= x0 && mx <= x1 && my >= y0 && my <= y1;
+	private HandheldRadioModelRenderer.ProjectedBounds getDialKnobHitbox() {
+		return HandheldRadioModelRenderer.projectGeoBoxToScreen(
+				this.layout, 1.7F, 8.7F, -1.0F, 3.6F, 10.6F, 1.0F
+		);
 	}
 
-	private boolean isOverPttButton(double mx, double my) {
-		if (this.layout == null) {
-			return false;
-		}
-		float px = HandheldRadioModelRenderer.computeParallaxOffsetX(this.animationState);
-		float py = HandheldRadioModelRenderer.computeParallaxOffsetY(this.animationState);
-		double x0 = this.layout.bodyLeft() - 14 + px;
-		double x1 = this.layout.bodyLeft() + 3 + px;
-		double y0 = this.layout.bodyCenterY() - 68 + py;
-		double y1 = this.layout.bodyCenterY() - 18 + py;
-		return mx >= x0 && mx <= x1 && my >= y0 && my <= y1;
+	private HandheldRadioModelRenderer.ProjectedBounds getPttButtonHitbox() {
+		return HandheldRadioModelRenderer.projectGeoBoxToScreen(
+				this.layout, -5.4F, 1.2F, -1.2F, -4.1F, 5.8F, 1.2F
+		);
 	}
 
-	private static boolean isInsideKey(KeySpec spec, double mx, double my, float pxOff, float pyOff) {
-		double x0 = spec.baseX() + pxOff;
-		double y0 = spec.baseY() + pyOff;
-		return mx >= x0 && mx <= (x0 + spec.width()) && my >= y0 && my <= (y0 + spec.height());
+	private HandheldRadioModelRenderer.ProjectedBounds getKeyHitbox(KeySpec spec) {
+		return HandheldRadioModelRenderer.projectGeoBoxToScreen(
+				this.layout, spec.geoX0(), spec.geoY0(), -2.35F, spec.geoX1(), spec.geoY1(), -1.85F
+		);
 	}
 
 	private void handleDigit(char digit) {
@@ -466,13 +473,13 @@ public class HandheldRadioScreen extends Screen {
 				return;
 			}
 			this.frequencyBuffer = this.frequencyBuffer + digit;
-			this.animationState.triggerKeyPress(keyId, 16.0F);
+			this.animationState.triggerKeyPress(keyId);
 			playTactileBeep(pitch, 0.35F);
 		} else {
 			if (!this.passcodeModified) {
 				this.passcodeModified = true;
 				this.passcodeBuffer = keyId;
-				this.animationState.triggerKeyPress(keyId, 16.0F);
+				this.animationState.triggerKeyPress(keyId);
 				playTactileBeep(pitch, 0.35F);
 				return;
 			}
@@ -481,7 +488,7 @@ public class HandheldRadioScreen extends Screen {
 				return;
 			}
 			this.passcodeBuffer = this.passcodeBuffer + digit;
-			this.animationState.triggerKeyPress(keyId, 16.0F);
+			this.animationState.triggerKeyPress(keyId);
 			playTactileBeep(pitch, 0.35F);
 		}
 	}
@@ -498,7 +505,7 @@ public class HandheldRadioScreen extends Screen {
 			return;
 		}
 		this.frequencyBuffer = this.frequencyBuffer + '.';
-		this.animationState.triggerKeyPress(".", 12.0F);
+		this.animationState.triggerKeyPress(".");
 		playTactileBeep(1.62F, 0.32F);
 	}
 
@@ -509,14 +516,14 @@ public class HandheldRadioScreen extends Screen {
 				return;
 			}
 			this.frequencyBuffer = this.frequencyBuffer.substring(0, this.frequencyBuffer.length() - 1);
-			this.animationState.triggerKeyPress("DEL", -16.0F);
+			this.animationState.triggerKeyPress("DEL");
 			playTactileBeep(0.88F, 0.34F);
 		} else {
 			if (!this.passcodeModified) {
 				if (this.hadInitialPasscode) {
 					this.passcodeModified = true;
 					this.passcodeBuffer = "";
-					this.animationState.triggerKeyPress("DEL", -16.0F);
+					this.animationState.triggerKeyPress("DEL");
 					playTactileBeep(0.88F, 0.34F);
 				} else {
 					rejectKeyPress("DEL");
@@ -528,16 +535,15 @@ public class HandheldRadioScreen extends Screen {
 				return;
 			}
 			this.passcodeBuffer = this.passcodeBuffer.substring(0, this.passcodeBuffer.length() - 1);
-			this.animationState.triggerKeyPress("DEL", -16.0F);
+			this.animationState.triggerKeyPress("DEL");
 			playTactileBeep(0.88F, 0.34F);
 		}
 	}
 
 	private void toggleInputMode() {
 		this.inputMode = (this.inputMode == InputMode.FREQUENCY) ? InputMode.PASSCODE : InputMode.FREQUENCY;
-		float dialStep = (this.inputMode == InputMode.PASSCODE) ? 28.0F : -28.0F;
 		float pitch = (this.inputMode == InputMode.PASSCODE) ? 1.36F : 1.50F;
-		this.animationState.triggerKeyPress("MODE", dialStep);
+		this.animationState.triggerKeyPress("MODE");
 		playTactileBeep(pitch, 0.34F);
 	}
 
@@ -551,9 +557,8 @@ public class HandheldRadioScreen extends Screen {
 			return;
 		}
 
-		// UpdateHandheldRadioPayload carries full state, so cancel any redundant pending dial packet
 		this.pendingDialSync = false;
-		this.animationState.triggerKeyPress("ENT", 24.0F);
+		this.animationState.triggerKeyPress("ENT");
 		playTactileBeep(1.78F, 0.42F);
 
 		if (ClientPlayNetworking.canSend(UpdateHandheldRadioPayload.TYPE)) {
@@ -564,11 +569,11 @@ public class HandheldRadioScreen extends Screen {
 					this.hand
 			));
 		}
-		onClose();
+		initiateSmoothClose();
 	}
 
 	private void rejectKeyPress(String keyId) {
-		this.animationState.triggerKeyPress(keyId, 0.0F);
+		this.animationState.triggerKeyPress(keyId);
 		this.invalidFlashTicks = Math.max(this.invalidFlashTicks, 8);
 		playTactileBeep(0.55F, 0.30F);
 	}
@@ -586,6 +591,9 @@ public class HandheldRadioScreen extends Screen {
 
 	@Override
 	public boolean charTyped(CharacterEvent event) {
+		if (this.transition.isClosing()) {
+			return true;
+		}
 		int cp = event.codepoint();
 		if (cp >= '0' && cp <= '9') {
 			handleDigit((char) cp);
@@ -600,6 +608,9 @@ public class HandheldRadioScreen extends Screen {
 
 	@Override
 	public boolean keyPressed(KeyEvent event) {
+		if (this.transition.isClosing()) {
+			return true;
+		}
 		int key = event.key();
 		if (key == InputConstants.KEY_BACKSPACE || key == InputConstants.KEY_DELETE) {
 			handleDelete();
@@ -614,7 +625,7 @@ public class HandheldRadioScreen extends Screen {
 			return true;
 		}
 		if (key == InputConstants.KEY_ESCAPE && shouldCloseOnEsc()) {
-			onClose();
+			initiateSmoothClose();
 			return true;
 		}
 		return super.keyPressed(event);
@@ -622,134 +633,105 @@ public class HandheldRadioScreen extends Screen {
 
 	@Override
 	public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
-		graphics.fillGradient(0, 0, this.width, this.height, 0x22070B09, 0x56050807);
+		float focus = this.transition.easedProgress();
+		if (focus > 0.35F) {
+			graphics.blurBeforeThisStratum();
+		}
+		int topAlpha = Math.round(0x28 * focus);
+		int botAlpha = Math.round(0x64 * focus);
+		graphics.fillGradient(
+				0, 0, this.width, this.height,
+				(topAlpha << 24) | 0x070B09,
+				(botAlpha << 24) | 0x050807
+		);
 	}
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+		this.transition.updateFrame();
+		if (this.transition.isCloseCompleted()) {
+			RadioInspectionTransition.resetGlobalFovImmediately();
+			super.onClose();
+			return;
+		}
+
 		if (this.layout == null) {
 			this.layout = HandheldRadioModelRenderer.computeLayout(this.width, this.height);
-			rebuildPhysicalKeySpecs(this.layout);
 		}
 
 		checkDialDebounceFlush(false);
-		this.animationState.updateFrame(mouseX, mouseY, this.layout, this.width, this.height);
+		this.animationState.updateFrame();
 
-		boolean transmitting = RadioClientInputHandler.isPttTransmitting() && this.isPowered && this.antennaExtended;
+		float focus = this.transition.easedProgress();
+		boolean transmitting = !this.transition.isClosing()
+				&& RadioClientInputHandler.isPttTransmitting()
+				&& this.isPowered
+				&& this.antennaExtended;
 
-		// 1. Render 3D GeckoLib model (body, 3D protruding keycaps, draggable antenna, rotary dial, side PTT)
+		float handSideSign = resolveHandSideSign();
+		HandheldRadioModelRenderer.LcdContent lcdContent = buildLcdContent(transmitting);
+
 		HandheldRadioModelRenderer.extractModel(
 				graphics,
 				this.layout,
 				this.isPowered,
 				transmitting,
+				handSideSign,
+				focus,
+				lcdContent,
 				this.animationState
 		);
 
-		float pxOff = HandheldRadioModelRenderer.computeParallaxOffsetX(this.animationState);
-		float pyOff = HandheldRadioModelRenderer.computeParallaxOffsetY(this.animationState);
-
-		// 2. Render parallax-synced recessed Digital LCD telemetry
-		extractDigitalLcd(graphics, this.layout, pxOff, pyOff, transmitting);
-
-		// 3. Render crisp front-face labels & subtle interactive hover highlights onto the 3D keycaps & controls
-		extract3DKeycapLabelsAndHighlights(graphics, mouseX, mouseY, pxOff, pyOff);
-
 		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
 
-		int hintY = Math.min(this.height - 14, this.layout.bodyTop() + this.layout.bodyHeight() + 10);
-		graphics.centeredText(
-				this.font,
-				Component.translatable("gui.tlouradio.handheld.hint_controls"),
-				this.layout.centerX(),
-				hintY,
-				0xA8C6D0CA
-		);
+		// Crisp flat 2D screen-aligned font over each physical 3D keycap face
+		extractFlat2DKeyLabels(graphics, mouseX, mouseY, focus, handSideSign);
+
+		if (focus > 0.65F && !this.transition.isClosing()) {
+			extractInteractiveHoverArrows(graphics, mouseX, mouseY);
+			extractSubtleControlHints(graphics, focus);
+		}
 	}
 
-	private void extractDigitalLcd(
-			GuiGraphicsExtractor graphics,
-			HandheldRadioModelRenderer.DeviceLayout d,
-			float pxOff,
-			float pyOff,
-			boolean transmitting
-	) {
-		int x = Math.round(d.lcdX() + pxOff);
-		int y = Math.round(d.lcdY() + pyOff);
-		int w = d.lcdWidth();
-		int h = d.lcdHeight();
+	private float resolveHandSideSign() {
+		if (this.minecraft.player == null) {
+			return 1.0F;
+		}
+		HumanoidArm mainArm = this.minecraft.player.getMainArm();
+		HumanoidArm usedArm = (this.hand == InteractionHand.MAIN_HAND) ? mainArm : mainArm.getOpposite();
+		return usedArm == HumanoidArm.RIGHT ? 1.0F : -1.0F;
+	}
 
-		int lcdBg = !this.isPowered
-				? 0xEA141916
-				: (!this.antennaExtended ? 0xEA282016 : 0xEA1B2B1F);
-		int lcdBorder = (this.invalidFlashTicks > 0)
-				? 0xFFD9534F
-				: (!this.antennaExtended && this.isPowered ? 0xFFD08C3F : (this.isPowered ? 0xFF4F7A5B : 0xFF333D36));
-
-		graphics.fill(x, y, x + w, y + h, lcdBg);
-		graphics.outline(x, y, w, h, lcdBorder);
-
-		int dividerY = y + 30;
-		graphics.horizontalLine(x + 3, x + w - 4, dividerY, this.isPowered ? 0x663B5E45 : 0x5529312B);
-
-		boolean effectiveHasPin = this.passcodeModified ? !this.passcodeBuffer.isEmpty() : this.hadInitialPasscode;
-
-		Component pwrText = transmitting
-				? Component.translatable("gui.tlouradio.handheld.lcd_tx")
+	private HandheldRadioModelRenderer.LcdContent buildLcdContent(boolean transmitting) {
+		String pwrStr = transmitting
+				? Component.translatable("gui.tlouradio.handheld.lcd_tx").getString()
 				: Component.translatable(
 						this.isPowered ? "gui.tlouradio.handheld.lcd_power_on" : "gui.tlouradio.handheld.lcd_power_off"
-				);
+				).getString();
 
-		Component rightStatusText;
-		int rightStatusColor;
+		String rightStatus;
+		int rightColor;
 		if (!this.antennaExtended) {
-			rightStatusText = Component.translatable("gui.tlouradio.handheld.lcd_no_signal");
-			rightStatusColor = this.isPowered ? 0xFFF29F4B : 0xFF8A6744;
+			rightStatus = Component.translatable("gui.tlouradio.handheld.lcd_no_signal").getString();
+			rightColor = this.isPowered ? 0xFFF29F4B : 0xFF8A6744;
 		} else if (this.activeNetworkId.isPresent()) {
-			rightStatusText = Component.translatable(
+			rightStatus = Component.translatable(
 					"gui.tlouradio.handheld.lcd_net_paired",
 					RadioStateComponent.shortNetworkId(this.activeNetworkId.get()).substring(0, 4)
-			);
-			rightStatusColor = this.isPowered ? 0xFF74C488 : 0xFF556359;
+			).getString();
+			rightColor = this.isPowered ? 0xFF74C488 : 0xFF556359;
 		} else {
-			rightStatusText = Component.translatable("gui.tlouradio.handheld.lcd_net_open");
-			rightStatusColor = this.isPowered ? 0xFF74C488 : 0xFF556359;
+			rightStatus = Component.translatable("gui.tlouradio.handheld.lcd_net_open").getString();
+			rightColor = this.isPowered ? 0xFF74C488 : 0xFF556359;
 		}
-
-		Component pinStatusText = Component.translatable(
-				effectiveHasPin ? "gui.tlouradio.handheld.lcd_pin_set" : "gui.tlouradio.handheld.lcd_pin_none"
-		);
 
 		int primaryInk = !this.isPowered
 				? 0xFF6B7D70
 				: (!this.antennaExtended ? 0xFFE8B974 : 0xFF9BF0AE);
-		int secondaryInk = this.isPowered ? 0xFF74C488 : 0xFF556359;
 		int pwrInk = transmitting
 				? 0xFFFFAE42
 				: (this.isPowered ? 0xFF66EE88 : 0xFFC85A5A);
 
-		// Line 1: Power/TX + Network / NO SIGNAL (ANT)
-		graphics.pose().pushMatrix();
-		graphics.pose().translate(x + 4, y + 4);
-		graphics.pose().scale(0.68F, 0.68F);
-		graphics.text(this.font, pwrText, 0, 0, pwrInk, false);
-		int netTextWidth = this.font.width(rightStatusText);
-		int scaledInnerWidth = (int) ((w - 8) / 0.68F);
-		graphics.text(this.font, rightStatusText, Math.max(0, scaledInnerWidth - netTextWidth), 0, rightStatusColor, false);
-		graphics.pose().popMatrix();
-
-		// Line 2: Active Frequency + Masked PIN indicator
-		String savedFreqLabel = this.activeSavedFrequency + " MHz";
-		graphics.pose().pushMatrix();
-		graphics.pose().translate(x + 4, y + 15);
-		graphics.pose().scale(0.80F, 0.80F);
-		graphics.text(this.font, savedFreqLabel, 0, 0, primaryInk, false);
-		int pinWidth = this.font.width(pinStatusText);
-		int scaledRow2Width = (int) ((w - 8) / 0.80F);
-		graphics.text(this.font, pinStatusText, Math.max(0, scaledRow2Width - pinWidth), 0, secondaryInk, false);
-		graphics.pose().popMatrix();
-
-		// Line 3: Live keypad entry buffer (FRQ> or PIN>)
 		boolean blinkCursor = (System.currentTimeMillis() / 450L) % 2L == 0L;
 		String cursor = blinkCursor ? "_" : "";
 		String bufferLine;
@@ -757,92 +739,143 @@ public class HandheldRadioScreen extends Screen {
 
 		if (this.inputMode == InputMode.FREQUENCY) {
 			boolean freqValid = RadioStateComponent.isValidFrequency(this.frequencyBuffer);
-			bufferLine = "FRQ> " + this.frequencyBuffer + cursor;
+			bufferLine = Component.translatable(
+					"gui.tlouradio.handheld.lcd_buf_freq",
+					this.frequencyBuffer + cursor
+			).getString();
 			bufferColor = (this.invalidFlashTicks > 0 || !freqValid) ? 0xFFF0B45A : 0xFFB8FFD4;
 		} else {
 			if (!this.passcodeModified) {
-				bufferLine = this.hadInitialPasscode ? "PIN> [****]" : ("PIN> " + cursor);
+				bufferLine = this.hadInitialPasscode
+						? Component.translatable("gui.tlouradio.handheld.lcd_buf_pin_masked").getString()
+						: Component.translatable("gui.tlouradio.handheld.lcd_buf_pin", cursor).getString();
 				bufferColor = 0xFF8CD8EE;
 			} else if (this.passcodeBuffer.isEmpty()) {
-				bufferLine = "PIN> " + cursor;
+				bufferLine = Component.translatable("gui.tlouradio.handheld.lcd_buf_pin", cursor).getString();
 				bufferColor = 0xFF8CD8EE;
 			} else {
-				bufferLine = "PIN> " + this.passcodeBuffer + cursor;
+				bufferLine = Component.translatable(
+						"gui.tlouradio.handheld.lcd_buf_pin",
+						this.passcodeBuffer + cursor
+				).getString();
 				bufferColor = 0xFFAEEBFF;
 			}
 		}
 
-		graphics.pose().pushMatrix();
-		graphics.pose().translate(x + 4, dividerY + 4);
-		graphics.pose().scale(0.82F, 0.82F);
-		graphics.text(this.font, bufferLine, 0, 0, bufferColor, false);
-		graphics.pose().popMatrix();
+		String freqLabel = Component.translatable(
+				"gui.tlouradio.handheld.lcd_freq_unit",
+				this.activeSavedFrequency
+		).getString();
+
+		return new HandheldRadioModelRenderer.LcdContent(
+				pwrStr,
+				pwrInk,
+				rightStatus,
+				rightColor,
+				freqLabel,
+				primaryInk,
+				bufferLine,
+				bufferColor
+		);
 	}
 
-	private void extract3DKeycapLabelsAndHighlights(
+	private void extractFlat2DKeyLabels(
 			GuiGraphicsExtractor graphics,
 			int mouseX,
 			int mouseY,
-			float pxOff,
-			float pyOff
+			float focus,
+			float handSideSign
 	) {
-		// Subtle hover indicator on physical 3D Antenna, Dial Knob, or Side PTT Latch
-		if (this.activeDragTarget == DragTarget.ANTENNA || (this.activeDragTarget == DragTarget.NONE && isOverAntenna(mouseX, mouseY))) {
-			int ax = Math.round(this.layout.centerX() - 41 + pxOff);
-			int ay = Math.round(this.layout.bodyTop() - Mth.lerp(this.animationState.antennaExtension(), 24.0F, 72.0F) + pyOff);
-			graphics.centeredText(this.font, this.antennaExtended ? "▼" : "▲", ax, ay - 9, 0xCC9BF0AE);
-		} else if (this.activeDragTarget == DragTarget.DIAL_KNOB || (this.activeDragTarget == DragTarget.NONE && isOverDialKnob(mouseX, mouseY))) {
-			int dx = Math.round(this.layout.centerX() + 37 + pxOff);
-			int dy = Math.round(this.layout.bodyTop() - 28 + pyOff);
-			graphics.centeredText(this.font, "◄►", dx, dy, 0xCCF2C97D);
-		} else if (this.activeDragTarget == DragTarget.PTT_BUTTON || (this.activeDragTarget == DragTarget.NONE && isOverPttButton(mouseX, mouseY))) {
-			int pttX = Math.round(this.layout.bodyLeft() - 24 + pxOff);
-			int pttY = Math.round(this.layout.bodyCenterY() - 48 + pyOff);
-			graphics.centeredText(this.font, "PTT", pttX, pttY, 0xFFFFAE52);
+		if (focus < 0.12F) {
+			return;
+		}
+		boolean canHover = !this.transition.isClosing() && this.activeDragTarget == DragTarget.NONE;
+		int alpha = Math.round(Mth.clamp((focus - 0.12F) / 0.88F, 0.0F, 1.0F) * 255.0F);
+		if (alpha <= 4) {
+			return;
 		}
 
-		// Crisp front-face legends glued onto each protruding 3D keycap cube
+		float pxPerGeo = this.layout.modelScale() / 16.0F;
+
 		for (KeySpec spec : this.keySpecs) {
-			float depression = this.animationState.getKeyDepressionFor(spec.keyId());
-			boolean depressed = depression > 0.05F;
-			boolean hovered = this.activeDragTarget == DragTarget.NONE && isInsideKey(spec, mouseX, mouseY, pxOff, pyOff);
 			boolean dotDisabled = (spec.role() == KeyRole.DOT && this.inputMode == InputMode.PASSCODE);
+			float depth = this.animationState.getKeyDepressionFor(spec.keyId());
+			boolean depressed = depth > 0.05F;
+			boolean hovered = canHover && !dotDisabled && getKeyHitbox(spec).contains(mouseX, mouseY);
 
-			// Keycap front face sits slightly forward (-2.58 geo Z -> 1.1x parallax) and sinks inward when pressed
-			float depthFactor = 1.10F - (0.16F * depression);
-			float keyX = spec.baseX() + (pxOff * depthFactor);
-			float keyY = spec.baseY() + (pyOff * depthFactor) + (depression * 1.2F);
-			int ix = Math.round(keyX);
-			int iy = Math.round(keyY);
-
-			if (hovered && !dotDisabled) {
-				graphics.outline(ix, iy, spec.width(), spec.height(), 0x889BF0AE);
+			int rgb;
+			if (dotDisabled) {
+				rgb = 0x6D7670;
 			} else if (depressed) {
-				graphics.outline(ix, iy, spec.width(), spec.height(), 0xAA8BE8A8);
+				rgb = 0xA8FFBE;
+			} else if (hovered) {
+				rgb = 0xFFFFFF;
 			} else if (spec.role() == KeyRole.MODE && this.inputMode == InputMode.PASSCODE) {
-				graphics.outline(ix, iy, spec.width(), spec.height(), 0x8864B5F6);
+				rgb = 0xB6E3FF;
+			} else {
+				rgb = 0xF0F4F1;
 			}
+			int argb = (alpha << 24) | rgb;
 
-			int labelColor = dotDisabled
-					? 0x88727A75
-					: (depressed ? 0xFFFFFFFF : (hovered ? 0xFFF2FFF6 : 0xFFE6ECE8));
+			float frontGeoZ = -2.30F + (depressed ? (0.52F * depth) : 0.0F);
+			Vector2f screenPos = HandheldRadioModelRenderer.projectGeoPointToScreen(
+					this.layout,
+					spec.centerGeoX(),
+					spec.centerGeoY(),
+					frontGeoZ,
+					focus,
+					handSideSign
+			);
 
 			Component label = spec.label();
-			int textW = this.font.width(label);
-			float maxInnerW = spec.width() - 4.0F;
+			int tw = Math.max(1, this.font.width(label));
+			float maxPxW = Math.max(8.0F, (spec.widthGeo() - 0.22F) * pxPerGeo * 0.96F);
+			float fitScale = Math.min(1.0F, maxPxW / (float) tw);
 
-			graphics.pose().pushMatrix();
-			if (textW > maxInnerW && textW > 0) {
-				float scale = maxInnerW / (float) textW;
-				graphics.pose().translate(keyX + spec.width() / 2.0F, keyY + spec.height() / 2.0F - (4.0F * scale));
-				graphics.pose().scale(scale, scale);
-				graphics.text(this.font, label, -textW / 2, 0, labelColor, true);
+			if (fitScale >= 0.99F) {
+				graphics.centeredText(
+						this.font,
+						label,
+						Math.round(screenPos.x),
+						Math.round(screenPos.y) - 4,
+						argb
+				);
 			} else {
-				graphics.pose().translate(keyX + (spec.width() - textW) / 2.0F, keyY + (spec.height() - 8) / 2.0F);
-				graphics.text(this.font, label, 0, 0, labelColor, true);
+				graphics.pose().pushMatrix();
+				graphics.pose().translate(screenPos.x, screenPos.y);
+				graphics.pose().scale(fitScale, fitScale);
+				graphics.text(this.font, label, -tw / 2, -4, argb, true);
+				graphics.pose().popMatrix();
 			}
-			graphics.pose().popMatrix();
 		}
+	}
+
+	private void extractInteractiveHoverArrows(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
+		HandheldRadioModelRenderer.ProjectedBounds antBox = getAntennaHitbox();
+		HandheldRadioModelRenderer.ProjectedBounds dialBox = getDialKnobHitbox();
+
+		if (this.activeDragTarget == DragTarget.ANTENNA
+				|| (this.activeDragTarget == DragTarget.NONE && antBox.contains(mouseX, mouseY))) {
+			HandheldRadioModelRenderer.extractAntennaHoverArrows(graphics, antBox, this.antennaExtended);
+		} else if (this.activeDragTarget == DragTarget.DIAL_KNOB
+				|| (this.activeDragTarget == DragTarget.NONE && dialBox.contains(mouseX, mouseY))) {
+			HandheldRadioModelRenderer.extractDialHoverArrows(graphics, dialBox);
+		}
+	}
+
+	private void extractSubtleControlHints(GuiGraphicsExtractor graphics, float focus) {
+		int alpha = Math.round(0xB4 * ((focus - 0.65F) / 0.35F));
+		int bottomBodyPx = Math.round(this.layout.originY() + (8.6F / 16.0F) * this.layout.modelScale()) + 7;
+		int hintY = Math.min(this.height - 11, bottomBodyPx);
+
+		Component hint = Component.translatable("gui.tlouradio.handheld.hint_controls");
+		int tw = this.font.width(hint);
+		float scale = 0.85F;
+		graphics.pose().pushMatrix();
+		graphics.pose().translate(this.layout.centerX(), hintY);
+		graphics.pose().scale(scale, scale);
+		graphics.text(this.font, hint, -tw / 2, 0, (alpha << 24) | 0xC6D0CA, true);
+		graphics.pose().popMatrix();
 	}
 
 	@Override

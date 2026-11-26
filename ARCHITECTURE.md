@@ -9,9 +9,9 @@
 - **Hedef:** Sunucu entegreli, düşük TPS/CPU tüketimli, hileye kapalı taktiksel telsiz sistemi.
 
 ## 2. Temel Mekanikler
-- **Sol Tık (Telsiz Eldeyken):** Blok kırma/vurma iptal edilir; telsizin güç durumu (Açık/Kapalı) değişir. Kapalıyken yayın yapılmaz ve kanal sesi duyulmaz.
-- **Sağ Tık (Telsiz Eldeyken):** Oyuncu olduğu yere sabitlenir ve istemcide 3D Cihaz İnceleme Ekranı açılır. Ekrandaki 3D telsiz modeli üzerinde `0-9`, `Sil` ve `Enter` tuşları bulunur; frekans ve şifre buradan girilir.
-- **Bas-Konuş (PTT):** Özel PTT tuşuna basılı tutulduğunda yayın açılır, bırakıldığında kapanır.
+- **`X` Tuşu (Telsiz Ana Eldeyken):** Telsizin güç durumu (Açık/Kapalı) tek basışta değişir (`ToggleRadioPowerPayload`). Kapalıyken yayın yapılmaz ve kanal sesi duyulmaz.
+- **Sol Tık Basılı Tutma (Bas-Konuş / PTT — Telsiz Eldeyken):** Blok kırma/vurma iptal edilir; telsiz ve anten açıkken sol tıka basılı tutulduğu sürece yayın (`RadioPttPayload(true)`) ve 1. şahıs ağıza yaklaştırma animasyonu aktif olur, sol tık bırakıldığında kapanır.
+- **Sağ Tık (Telsiz Eldeyken):** Oyuncu olduğu yere sabitlenir ve istemcide 3D Cihaz İnceleme Ekranı açılır. Ekrandaki 3D telsiz modeli üzerinde `0-9`, `.`, `Sil`, `FRQ/PIN` ve `Enter` tuşları, sürüklenebilir anten, dönen frekans düğmesi ve yan PTT mandalı bulunur.
 - **Ana Telsiz Kutusu (BlockEntity):** Haritaya yerleştirilen merkez ünitedir. Benzersiz `Network ID`, `Frekans` ve `Şifre` tutar. El telsizleri bu kutuya bağlanır. Kutu kırılırsa veya frekans/şifre değiştirilirse bağlı tüm telsizlerin bağlantısı anında kesilir.
 
 ## 3. Siber Güvenlik ve Ses Yönlendirme Kuralları (KRİTİK)

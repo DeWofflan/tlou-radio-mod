@@ -6,6 +6,7 @@ import com.tlouradio.block.entity.ModBlockEntities;
 import com.tlouradio.client.RadioClientInputHandler;
 import com.tlouradio.client.gui.HandheldRadioScreen;
 import com.tlouradio.client.gui.RadioBaseBoxScreen;
+import com.tlouradio.client.gui.render.BaseBoxModelRenderer;
 import com.tlouradio.client.gui.render.HandheldRadioModelRenderer;
 import com.tlouradio.client.renderer.HandheldRadioGeoItemRenderer;
 import com.tlouradio.client.renderer.RadioBaseBoxGeoRenderer;
@@ -47,6 +48,7 @@ public class TlouRadioClient implements ClientModInitializer {
 		BlockEntityRendererRegistry.register(ModBlockEntities.RADIO_BASE_BOX, RadioBaseBoxGeoRenderer::new);
 
 		HandheldRadioModelRenderer.initialize();
+		BaseBoxModelRenderer.initialize();
 		RadioClientInputHandler.initialize();
 		RadioClientHooks.registerHandheldScreenOpener((hand, stack) ->
 				Minecraft.getInstance().gui.setScreen(new HandheldRadioScreen(hand, stack))

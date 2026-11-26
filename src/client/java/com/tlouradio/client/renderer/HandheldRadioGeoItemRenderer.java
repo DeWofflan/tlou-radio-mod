@@ -7,19 +7,22 @@ import com.geckolib.renderer.GeoItemRenderer;
 import com.geckolib.renderer.base.BoneSnapshots;
 import com.geckolib.renderer.base.GeoRenderState;
 import com.geckolib.renderer.base.RenderPassInfo;
+import com.geckolib.renderer.layer.builtin.AutoGlowingGeoLayer;
 import com.google.common.reflect.TypeToken;
 import com.tlouradio.TlouRadioMod;
 import com.tlouradio.client.RadioClientInputHandler;
 import com.tlouradio.component.ModDataComponents;
 import com.tlouradio.component.RadioStateComponent;
 import com.tlouradio.item.HandheldRadioItem;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemDisplayContext;
 import net.minecraft.world.item.ItemStack;
+import org.jspecify.annotations.Nullable;
 
 public class HandheldRadioGeoItemRenderer extends GeoItemRenderer<HandheldRadioItem> {
-	private static final DataTicket<Boolean> POWERED_TICKET =
+	public static final DataTicket<Boolean> POWERED_TICKET =
 			DataTicket.create("tlouradio_item_powered", new TypeToken<>() {});
 	private static final DataTicket<Boolean> ANTENNA_EXTENDED_TICKET =
 			DataTicket.create("tlouradio_item_antenna_extended", new TypeToken<>() {});
@@ -33,6 +36,7 @@ public class HandheldRadioGeoItemRenderer extends GeoItemRenderer<HandheldRadioI
 	public HandheldRadioGeoItemRenderer() {
 		super(new DefaultedItemGeoModel<>(TlouRadioMod.id("handheld_radio")));
 		useAlternateGuiLighting();
+		withRenderLayer(new PoweredLcdGlowLayer(this));
 	}
 
 	@Override
@@ -87,34 +91,35 @@ public class HandheldRadioGeoItemRenderer extends GeoItemRenderer<HandheldRadioI
 
 		snapshots.ifPresent("ptt_button", bone -> {
 			if (ptt > 0.01F) {
-				bone.setTranslateX(-0.48F * ptt);
+				bone.setTranslateX(0.55F * ptt);
 			}
 		});
 
+		float extRatio;
+		if (!antennaExtended) {
+			extRatio = 0.0F;
+		} else if (flick > 0.001F) {
+			float snapT = Mth.clamp(flick / 0.48F, 0.0F, 1.0F);
+			float easeOut = 1.0F - (1.0F - snapT) * (1.0F - snapT);
+			float overshoot = Mth.sin(flick * Mth.PI * 3.0F) * (1.0F - flick) * 0.10F;
+			extRatio = Mth.clamp(easeOut + overshoot, 0.0F, 1.06F);
+		} else {
+			extRatio = 1.0F;
+		}
+
+		float clampedExt = Mth.clamp(extRatio, 0.0F, 1.0F);
+		snapshots.ifPresent("antenna_seg1", seg1 -> seg1.setTranslateY(-1.80F * (1.0F - clampedExt)));
+		snapshots.ifPresent("antenna_seg2", seg2 -> seg2.setTranslateY(-2.20F * (1.0F - clampedExt)));
+
 		snapshots.ifPresent("antenna", bone -> {
-			if (!antennaExtended) {
-				bone.setTranslateY(-4.4F);
-				bone.setScaleY(0.30F);
-				return;
-			}
-
-			if (flick > 0.001F) {
-				// Telescopic snap-out + spring overshoot whip flex
-				float snapT = Mth.clamp(flick / 0.48F, 0.0F, 1.0F);
-				float easeOut = 1.0F - (1.0F - snapT) * (1.0F - snapT);
-				float overshoot = Mth.sin(flick * Mth.PI * 3.0F) * (1.0F - flick) * 0.16F;
-				float ext = Mth.clamp(easeOut + overshoot, 0.25F, 1.12F);
-
-				bone.setTranslateY(-4.4F * (1.0F - Mth.clamp(easeOut, 0.0F, 1.0F)));
-				bone.setScaleY(ext);
-
-				float whipAngle = Mth.sin(flick * Mth.PI * 3.5F) * (1.0F - flick) * 14.0F * Mth.DEG_TO_RAD;
+			if (antennaExtended && flick > 0.001F) {
+				float whipAngle = Mth.sin(flick * Mth.PI * 3.5F) * (1.0F - flick) * 11.0F * Mth.DEG_TO_RAD;
 				bone.setRotX(bone.getRotX() - whipAngle);
 				bone.setRotZ(bone.getRotZ() + whipAngle * 0.65F);
-			} else if (ptt > 0.01F) {
+			} else if (antennaExtended && ptt > 0.01F) {
 				double ageTicks = state.getOrDefaultGeckolibData(DataTickets.ANIMATABLE_INSTANCE_ID, 0L)
 						+ (System.currentTimeMillis() / 50.0D);
-				float sway = Mth.sin((float) (ageTicks * 0.45D)) * 2.8F * Mth.DEG_TO_RAD * ptt;
+				float sway = Mth.sin((float) (ageTicks * 0.45D)) * 2.2F * Mth.DEG_TO_RAD * ptt;
 				bone.setRotX(bone.getRotX() + sway);
 				bone.setRotZ(bone.getRotZ() - sway * 0.8F);
 			}
@@ -128,9 +133,33 @@ public class HandheldRadioGeoItemRenderer extends GeoItemRenderer<HandheldRadioI
 		try {
 			double parsed = Double.parseDouble(frequency);
 			int tenths = (int) Math.round(parsed * 10.0D);
-			return ((tenths - 1000) * 18.0F) * Mth.DEG_TO_RAD;
+			return ((tenths - 1000) * 6.0F) * Mth.DEG_TO_RAD;
 		} catch (NumberFormatException ignored) {
 			return 0.0F;
+		}
+	}
+
+	/**
+	 * Emissive layer active strictly when {@code isPowered == true}. Illuminates both the greenish
+	 * LCD screen and the top status LED in 1st-person, 3rd-person, GUI, and dropped ground ItemEntities.
+	 */
+	private static final class PoweredLcdGlowLayer
+			extends AutoGlowingGeoLayer<HandheldRadioItem, GeoItemRenderer.RenderData, GeoRenderState> {
+		private PoweredLcdGlowLayer(HandheldRadioGeoItemRenderer renderer) {
+			super(renderer);
+		}
+
+		@Override
+		protected boolean shouldAddZOffset(GeoRenderState renderState) {
+			return true;
+		}
+
+		@Override
+		protected @Nullable RenderType getRenderType(GeoRenderState renderState) {
+			if (!renderState.getOrDefaultGeckolibData(POWERED_TICKET, false)) {
+				return null;
+			}
+			return super.getRenderType(renderState);
 		}
 	}
 }
