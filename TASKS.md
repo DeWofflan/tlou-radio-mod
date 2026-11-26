@@ -19,9 +19,9 @@
 - [x] Ana Kutu kırıldığında veya şifre/frekans değiştiğinde bağlı tüm telsizlerin bağlantısının anında kesilmesi ve bildirim/ses tetiklenmesi.
 
 ## Faz 4: 3D Cihaz İnceleme Ekranı [Model: Neon]
-- [ ] Sağ tıkla oyuncunun hareketinin kilitlenmesi ve özel `RadioScreen` arayüzünün açılması.
-- [ ] Ekranda 3D telsiz modelinin konumlandırılması.
-- [ ] `0-9`, `Sil` ve `Enter` tuşlarının eklenmesi, sunucuya güvenli paketlerle frekans/şifre güncellemesi gönderilmesi.
+- [x] Sağ tıkla oyuncunun hareketinin kilitlenmesi ve özel `RadioScreen` arayüzünün açılması.
+- [x] Ekranda 3D telsiz modelinin konumlandırılması.
+- [x] `0-9`, `Sil` ve `Enter` tuşlarının eklenmesi, sunucuya güvenli paketlerle frekans/şifre güncellemesi gönderilmesi.
 
 ## Faz 5: Model, Animasyon ve Atmosfer [Model: Neon + Hydrogen]
 - [ ] Blockbench `.geo.json` modellerinin ve dokularının projeye eklenmesi.

@@ -92,6 +92,19 @@ public class RadioBaseBoxBlock extends Block implements EntityBlock {
 			return InteractionResult.TRY_WITH_EMPTY_HAND;
 		}
 
+		return tryPairHandheldRadio(level, pos, player, radioStack);
+	}
+
+	public static InteractionResult tryPairHandheldRadio(
+			Level level,
+			BlockPos pos,
+			Player player,
+			ItemStack radioStack
+	) {
+		if (radioStack == null || radioStack.isEmpty() || !(radioStack.getItem() instanceof HandheldRadioItem)) {
+			return InteractionResult.PASS;
+		}
+
 		if (level.isClientSide()) {
 			return InteractionResult.SUCCESS;
 		}
