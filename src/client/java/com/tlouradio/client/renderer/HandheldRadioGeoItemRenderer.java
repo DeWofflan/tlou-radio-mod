@@ -35,6 +35,8 @@ public class HandheldRadioGeoItemRenderer extends GeoItemRenderer<HandheldRadioI
 			DataTicket.create("tlouradio_item_ptt_progress", new TypeToken<>() {});
 	private static final DataTicket<Float> RX_INTENSITY_TICKET =
 			DataTicket.create("tlouradio_item_rx_intensity", new TypeToken<>() {});
+	private static final DataTicket<Boolean> HOT_MIC_LOCKED_TICKET =
+			DataTicket.create("tlouradio_item_hot_mic_locked", new TypeToken<>() {});
 
 	public HandheldRadioGeoItemRenderer() {
 		super(new DefaultedItemGeoModel<>(TlouRadioMod.id("handheld_radio")));
@@ -82,6 +84,7 @@ public class HandheldRadioGeoItemRenderer extends GeoItemRenderer<HandheldRadioI
 		renderState.addGeckolibData(FLICK_PROGRESS_TICKET, flick);
 		renderState.addGeckolibData(PTT_PROGRESS_TICKET, ptt);
 		renderState.addGeckolibData(RX_INTENSITY_TICKET, rxIntensity);
+		renderState.addGeckolibData(HOT_MIC_LOCKED_TICKET, radioState.hotMicLocked());
 	}
 
 	@Override
@@ -93,12 +96,24 @@ public class HandheldRadioGeoItemRenderer extends GeoItemRenderer<HandheldRadioI
 		float flick = state.getOrDefaultGeckolibData(FLICK_PROGRESS_TICKET, 0.0F);
 		float ptt = state.getOrDefaultGeckolibData(PTT_PROGRESS_TICKET, 0.0F);
 		float rx = state.getOrDefaultGeckolibData(RX_INTENSITY_TICKET, 0.0F);
+		boolean hotMic = state.getOrDefaultGeckolibData(HOT_MIC_LOCKED_TICKET, false);
+		boolean showTxLed = powered && hotMic;
 
 		snapshots.ifPresent("led_on", bone -> {
-			bone.skipRender(!powered);
-			if (powered && rx > 0.02F) {
+			bone.skipRender(!powered || showTxLed);
+			if (powered && !showTxLed && rx > 0.02F) {
 				float pulse = 0.5F + 0.5F * Mth.sin((System.currentTimeMillis() % 1000L) / 1000.0F * Mth.TWO_PI * 3.0F);
 				float ledScale = 1.0F + 0.22F * pulse * rx;
+				bone.setScaleX(ledScale);
+				bone.setScaleY(ledScale);
+				bone.setScaleZ(ledScale);
+			}
+		});
+		snapshots.ifPresent("led_tx", bone -> {
+			bone.skipRender(!showTxLed);
+			if (showTxLed) {
+				float pulse = 0.5F + 0.5F * Mth.sin((System.currentTimeMillis() % 1250L) / 1250.0F * Mth.TWO_PI * 2.0F);
+				float ledScale = 1.0F + 0.16F * pulse;
 				bone.setScaleX(ledScale);
 				bone.setScaleY(ledScale);
 				bone.setScaleZ(ledScale);
@@ -108,8 +123,9 @@ public class HandheldRadioGeoItemRenderer extends GeoItemRenderer<HandheldRadioI
 		snapshots.ifPresent("dial_knob", bone -> bone.setRotY(dialAngleRad));
 
 		snapshots.ifPresent("ptt_button", bone -> {
-			if (ptt > 0.01F) {
-				bone.setTranslateX(0.55F * ptt);
+			float effectivePtt = showTxLed ? 1.0F : ptt;
+			if (effectivePtt > 0.01F) {
+				bone.setTranslateX(0.55F * effectivePtt);
 			}
 		});
 

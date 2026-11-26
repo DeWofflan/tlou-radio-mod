@@ -1,0 +1,18 @@
+{
+	"type": "minecraft:crafting_shaped",
+	"category": "misc",
+	"key": {
+		"B": "tlouradio:radio_battery",
+		"C": "tlouradio:pcb_board",
+		"P": "tlouradio:plastic_sheet"
+	},
+	"pattern": [
+		"BCB",
+		"CPC",
+		"BCB"
+	],
+	"result": {
+		"id": "tlouradio:radio_base_box",
+		"count": 1
+	}
+}

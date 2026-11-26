@@ -123,5 +123,9 @@ public class HandheldRadioItem extends Item implements GeoItem {
 		} else {
 			tooltipAdder.accept(Component.translatable("tooltip.tlouradio.network_open").withStyle(ChatFormatting.DARK_GRAY));
 		}
+
+		if (state.hotMicLocked()) {
+			tooltipAdder.accept(Component.translatable("tooltip.tlouradio.hot_mic_locked").withStyle(ChatFormatting.RED));
+		}
 	}
 }

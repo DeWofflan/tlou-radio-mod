@@ -14,6 +14,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.ChatFormatting;
+import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
@@ -45,12 +46,15 @@ public final class RadioNetworkManager {
 			UUID entityUuid,
 			ItemEntity entity,
 			ServerLevel level,
-			RadioChannelKey channel
+			RadioChannelKey channel,
+			boolean hotMicLocked
 	) {
 	}
 
 	private static final long RX_SIGNAL_RATE_LIMIT_MS = 150L;
 	private static final long DROPPED_PARTICLE_RATE_LIMIT_MS = 250L;
+	private static final long HOT_MIC_PARTICLE_RATE_LIMIT_MS = 350L;
+	private static final DustParticleOptions HOT_MIC_DUST_PARTICLE = new DustParticleOptions(0xFF331A, 0.65F);
 
 	private static final ConcurrentHashMap<RadioChannelKey, Set<UUID>> CHANNEL_LISTENERS = new ConcurrentHashMap<>();
 	private static final ConcurrentHashMap<UUID, Set<RadioChannelKey>> PLAYER_SUBSCRIPTIONS = new ConcurrentHashMap<>();
@@ -58,7 +62,10 @@ public final class RadioNetworkManager {
 	private static final ConcurrentHashMap<UUID, Long> LAST_RX_SIGNAL_MS = new ConcurrentHashMap<>();
 	private static final ConcurrentHashMap<RadioChannelKey, Set<DroppedRadioEntry>> DROPPED_RADIOS_BY_CHANNEL = new ConcurrentHashMap<>();
 	private static final ConcurrentHashMap<UUID, DroppedRadioEntry> DROPPED_RADIO_INDEX = new ConcurrentHashMap<>();
+	private static final ConcurrentHashMap<UUID, DroppedRadioEntry> HOT_MIC_RADIO_INDEX = new ConcurrentHashMap<>();
 	private static final ConcurrentHashMap<UUID, Long> LAST_DROPPED_PARTICLE_MS = new ConcurrentHashMap<>();
+	private static final ConcurrentHashMap<UUID, Long> LAST_HOT_MIC_PARTICLE_MS = new ConcurrentHashMap<>();
+	private static final Set<UUID> HOT_MIC_DROPPING_PLAYERS = ConcurrentHashMap.newKeySet();
 	private static final Set<UUID> ONLINE_PLAYERS = ConcurrentHashMap.newKeySet();
 
 	private static volatile MinecraftServer activeServer;
@@ -137,9 +144,47 @@ public final class RadioNetworkManager {
 			return;
 		}
 
+		if (!HOT_MIC_DROPPING_PLAYERS.contains(playerId)) {
+			clearHotMicFlagsInInventory(player);
+		}
+
 		Set<RadioChannelKey> desiredChannels = collectPoweredRadioChannels(player);
 		updateSubscriptions(playerId, desiredChannels);
 		revalidateHeldPtt(player);
+	}
+
+	private static void clearHotMicFlagsInInventory(ServerPlayer player) {
+		Inventory inventory = player.getInventory();
+		for (ItemStack stack : inventory.getNonEquipmentItems()) {
+			clearHotMicFlagIfLocked(stack);
+		}
+		clearHotMicFlagIfLocked(player.getOffhandItem());
+	}
+
+	private static void clearHotMicFlagIfLocked(ItemStack stack) {
+		if (stack == null || stack.isEmpty() || !(stack.getItem() instanceof HandheldRadioItem)) {
+			return;
+		}
+		RadioStateComponent state = stack.getOrDefault(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT);
+		if (state.hotMicLocked()) {
+			stack.set(ModDataComponents.RADIO_STATE, state.withHotMicLocked(false));
+		}
+	}
+
+	public static boolean isTransmitting(UUID playerId) {
+		return playerId != null && ACTIVE_TRANSMITTERS.containsKey(playerId);
+	}
+
+	public static void beginHotMicDrop(UUID playerId) {
+		if (playerId != null) {
+			HOT_MIC_DROPPING_PLAYERS.add(playerId);
+		}
+	}
+
+	public static void endHotMicDrop(UUID playerId) {
+		if (playerId != null) {
+			HOT_MIC_DROPPING_PLAYERS.remove(playerId);
+		}
 	}
 
 	/**
@@ -400,7 +445,10 @@ public final class RadioNetworkManager {
 		LAST_RX_SIGNAL_MS.clear();
 		DROPPED_RADIOS_BY_CHANNEL.clear();
 		DROPPED_RADIO_INDEX.clear();
+		HOT_MIC_RADIO_INDEX.clear();
 		LAST_DROPPED_PARTICLE_MS.clear();
+		LAST_HOT_MIC_PARTICLE_MS.clear();
+		HOT_MIC_DROPPING_PLAYERS.clear();
 		ONLINE_PLAYERS.clear();
 	}
 
@@ -418,12 +466,18 @@ public final class RadioNetworkManager {
 		}
 		UUID entityId = itemEntity.getUUID();
 		RadioChannelKey channel = state.toChannelKey();
-		DroppedRadioEntry entry = new DroppedRadioEntry(entityId, itemEntity, level, channel);
+		boolean hotMicLocked = state.hotMicLocked();
+		DroppedRadioEntry entry = new DroppedRadioEntry(entityId, itemEntity, level, channel, hotMicLocked);
 		DroppedRadioEntry previous = DROPPED_RADIO_INDEX.put(entityId, entry);
 		if (previous != null) {
 			removeDroppedFromChannel(previous.channel(), previous);
 		}
 		DROPPED_RADIOS_BY_CHANNEL.computeIfAbsent(channel, ignored -> ConcurrentHashMap.newKeySet()).add(entry);
+		if (hotMicLocked) {
+			HOT_MIC_RADIO_INDEX.put(entityId, entry);
+		} else {
+			HOT_MIC_RADIO_INDEX.remove(entityId);
+		}
 	}
 
 	public static void untrackDroppedRadio(UUID entityUuid) {
@@ -431,6 +485,8 @@ public final class RadioNetworkManager {
 			return;
 		}
 		LAST_DROPPED_PARTICLE_MS.remove(entityUuid);
+		LAST_HOT_MIC_PARTICLE_MS.remove(entityUuid);
+		HOT_MIC_RADIO_INDEX.remove(entityUuid);
 		DroppedRadioEntry removed = DROPPED_RADIO_INDEX.remove(entityUuid);
 		if (removed != null) {
 			removeDroppedFromChannel(removed.channel(), removed);
@@ -453,6 +509,62 @@ public final class RadioNetworkManager {
 			return Collections.emptySet();
 		}
 		return Set.copyOf(entries);
+	}
+
+	/**
+	 * Thread-safe snapshot of active hot-mic ground radios, called on SVC's UDP thread.
+	 */
+	public static Set<DroppedRadioEntry> getHotMicRadios() {
+		if (HOT_MIC_RADIO_INDEX.isEmpty()) {
+			return Collections.emptySet();
+		}
+		return Set.copyOf(HOT_MIC_RADIO_INDEX.values());
+	}
+
+	/**
+	 * Rate-limited (350 ms) subtle red dust particle cue above an actively capturing hot-mic radio.
+	 */
+	public static void emitHotMicCaptureEffect(DroppedRadioEntry entry) {
+		if (entry == null) {
+			return;
+		}
+		MinecraftServer server = activeServer;
+		if (server == null) {
+			return;
+		}
+		UUID entityId = entry.entityUuid();
+		long now = System.currentTimeMillis();
+		Long prev = LAST_HOT_MIC_PARTICLE_MS.get(entityId);
+		if (prev != null && (now - prev) < HOT_MIC_PARTICLE_RATE_LIMIT_MS) {
+			return;
+		}
+		if (prev == null) {
+			if (LAST_HOT_MIC_PARTICLE_MS.putIfAbsent(entityId, now) != null) {
+				return;
+			}
+		} else if (!LAST_HOT_MIC_PARTICLE_MS.replace(entityId, prev, now)) {
+			return;
+		}
+
+		server.execute(() -> {
+			ItemEntity entity = entry.entity();
+			if (entity == null || entity.isRemoved() || !entity.isAlive()) {
+				untrackDroppedRadio(entityId);
+				return;
+			}
+			Vec3 pos = entity.position();
+			entry.level().sendParticles(
+					HOT_MIC_DUST_PARTICLE,
+					pos.x,
+					pos.y + 0.28D,
+					pos.z,
+					1,
+					0.06D,
+					0.04D,
+					0.06D,
+					0.0D
+			);
+		});
 	}
 
 	/**

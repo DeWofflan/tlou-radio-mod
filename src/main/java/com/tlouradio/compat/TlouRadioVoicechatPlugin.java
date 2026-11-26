@@ -23,9 +23,11 @@ import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.phys.Vec3;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -34,6 +36,8 @@ public class TlouRadioVoicechatPlugin implements VoicechatPlugin {
 	public static final String RADIO_CATEGORY_ID = "tlouradio";
 	public static final float RADIO_SPEAKER_DISTANCE = 6.0F;
 	public static final float DROPPED_RADIO_SPEAKER_DISTANCE = 16.0F;
+	public static final double HOT_MIC_CAPTURE_RADIUS = 12.0D;
+	private static final double HOT_MIC_CAPTURE_RADIUS_SQ = HOT_MIC_CAPTURE_RADIUS * HOT_MIC_CAPTURE_RADIUS;
 	private static final double RADIO_EMITTER_HEIGHT_OFFSET = 1.2D;
 	private static final double DROPPED_RADIO_HEIGHT_OFFSET = 0.25D;
 
@@ -94,40 +98,68 @@ public class TlouRadioVoicechatPlugin implements VoicechatPlugin {
 		}
 
 		UUID speakerId = speaker.getUuid();
-		Optional<RadioChannelKey> activeChannelOpt = RadioNetworkManager.getActiveTransmissionChannel(speakerId);
-		if (activeChannelOpt.isEmpty()) {
-			return;
-		}
+		Optional<RadioChannelKey> pttChannelOpt = RadioNetworkManager.getActiveTransmissionChannel(speakerId);
 
-		RadioChannelKey channel = activeChannelOpt.get();
-		Set<UUID> channelListeners = RadioNetworkManager.getChannelListeners(channel);
-		Set<RadioNetworkManager.DroppedRadioEntry> droppedRadios = RadioNetworkManager.getDroppedRadios(channel);
+		ServerLevel speakerLevel = speaker.getServerLevel();
+		Position speakerPos = speaker.getPosition();
+		Object speakerMcLevel = (speakerLevel != null) ? speakerLevel.getServerLevel() : null;
 
-		Set<UUID> authorizedReceivers = new LinkedHashSet<>();
-		for (UUID listenerId : channelListeners) {
-			if (!listenerId.equals(speakerId)) {
-				authorizedReceivers.add(listenerId);
-			}
-		}
-
-		if (RadioEavesdropRegistry.hasHooks()) {
-			for (UUID candidateId : RadioNetworkManager.getOnlinePlayers()) {
-				if (!candidateId.equals(speakerId)
-						&& !authorizedReceivers.contains(candidateId)
-						&& RadioEavesdropRegistry.isAuthorized(candidateId, speakerId, channel)) {
-					authorizedReceivers.add(candidateId);
+		List<RadioNetworkManager.DroppedRadioEntry> capturingHotMics = new ArrayList<>();
+		Set<UUID> capturingHotMicEntityIds = new HashSet<>();
+		if (speakerMcLevel != null && speakerPos != null) {
+			Set<RadioNetworkManager.DroppedRadioEntry> hotMicRadios = RadioNetworkManager.getHotMicRadios();
+			if (!hotMicRadios.isEmpty()) {
+				double sx = speakerPos.getX();
+				double sy = speakerPos.getY();
+				double sz = speakerPos.getZ();
+				for (RadioNetworkManager.DroppedRadioEntry entry : hotMicRadios) {
+					ItemEntity itemEntity = entry.entity();
+					if (itemEntity == null || itemEntity.isRemoved() || !itemEntity.isAlive()) {
+						RadioNetworkManager.untrackDroppedRadio(entry.entityUuid());
+						continue;
+					}
+					if (entry.level() != speakerMcLevel) {
+						continue;
+					}
+					Vec3 pos = itemEntity.position();
+					double dx = pos.x - sx;
+					double dy = pos.y - sy;
+					double dz = pos.z - sz;
+					if ((dx * dx + dy * dy + dz * dz) <= HOT_MIC_CAPTURE_RADIUS_SQ) {
+						capturingHotMics.add(entry);
+						capturingHotMicEntityIds.add(entry.entityUuid());
+					}
 				}
 			}
 		}
 
-		if (authorizedReceivers.isEmpty() && droppedRadios.isEmpty()) {
+		if (pttChannelOpt.isEmpty() && capturingHotMics.isEmpty()) {
+			return;
+		}
+
+		Set<RadioChannelKey> targetChannels = new LinkedHashSet<>();
+		pttChannelOpt.ifPresent(targetChannels::add);
+		for (RadioNetworkManager.DroppedRadioEntry entry : capturingHotMics) {
+			targetChannels.add(entry.channel());
+		}
+
+		boolean hasAnyTarget = false;
+		for (RadioChannelKey channel : targetChannels) {
+			if (!RadioNetworkManager.getChannelListeners(channel).isEmpty()
+					|| !RadioNetworkManager.getDroppedRadios(channel).isEmpty()
+					|| (RadioEavesdropRegistry.hasHooks() && !RadioNetworkManager.getOnlinePlayers().isEmpty())) {
+				hasAnyTarget = true;
+				break;
+			}
+		}
+		if (!hasAnyTarget) {
 			return;
 		}
 
 		VoicechatServerApi api = event.getVoicechat();
 		MicrophonePacket micPacket = event.getPacket();
 		byte[] rawOpusData = micPacket.getOpusEncodedData();
-		// Execute tactical radio DSP strictly ONCE per speaker packet, outside the receiver loop
+		// Execute tactical radio DSP strictly ONCE per speaker packet, outside all channel/receiver loops
 		byte[] opusData = RadioAudioDspProcessor.process(api, speakerId, rawOpusData);
 
 		// Determine players already hearing the speaker's live proximity voice to prevent double-audio echo
@@ -136,8 +168,6 @@ public class TlouRadioVoicechatPlugin implements VoicechatPlugin {
 			proximityDistance = api.getServerConfig().getDouble("whisper_distance", proximityDistance * 0.5D);
 		}
 
-		ServerLevel speakerLevel = speaker.getServerLevel();
-		Position speakerPos = speaker.getPosition();
 		Set<UUID> playersInDirectProximity = new HashSet<>();
 		if (speakerLevel != null && speakerPos != null) {
 			for (ServerPlayer nearbyDirect : api.getPlayersInRange(speakerLevel, speakerPos, proximityDistance)) {
@@ -147,120 +177,158 @@ public class TlouRadioVoicechatPlugin implements VoicechatPlugin {
 
 		Set<UUID> deliveredRecipients = new HashSet<>();
 
-		for (UUID receiverId : authorizedReceivers) {
-			VoicechatConnection receiverConn = api.getConnectionOf(receiverId);
-			if (receiverConn == null) {
-				continue;
-			}
-			ServerPlayer receiverPlayer = receiverConn.getPlayer();
-			if (receiverPlayer == null) {
-				continue;
-			}
+		for (RadioChannelKey channel : targetChannels) {
+			boolean isDirectPttChannel = pttChannelOpt.isPresent() && pttChannelOpt.get().equals(channel);
+			Set<UUID> channelListeners = RadioNetworkManager.getChannelListeners(channel);
+			Set<RadioNetworkManager.DroppedRadioEntry> droppedRadios = RadioNetworkManager.getDroppedRadios(channel);
 
-			ServerLevel receiverLevel = receiverPlayer.getServerLevel();
-			Position receiverPos = receiverPlayer.getPosition();
-			if (receiverLevel == null || receiverPos == null) {
-				continue;
-			}
-
-			Position emitterPos = api.createPosition(
-					receiverPos.getX(),
-					receiverPos.getY() + RADIO_EMITTER_HEIGHT_OFFSET,
-					receiverPos.getZ()
-			);
-
-			LocationalSoundPacket radioSoundPacket = micPacket.locationalSoundPacketBuilder()
-					.channelId(deriveStreamChannelId(speakerId, receiverId))
-					.sender(speakerId)
-					.opusEncodedData(opusData)
-					.position(emitterPos)
-					.distance(RADIO_SPEAKER_DISTANCE)
-					.category(RADIO_CATEGORY_ID)
-					.build();
-
-			// 1. Deliver to the radio holder / authorized listener if not already within direct proximity of speaker
-			if (receiverConn.isConnected()
-					&& !receiverConn.isDisabled()
-					&& !playersInDirectProximity.contains(receiverId)
-					&& deliveredRecipients.add(receiverId)) {
-				api.sendLocationalSoundPacketTo(receiverConn, radioSoundPacket);
-				if (channelListeners.contains(receiverId)) {
-					RadioNetworkManager.notifyReceivingSignal(receiverId);
+			Set<UUID> authorizedReceivers = new LinkedHashSet<>();
+			for (UUID listenerId : channelListeners) {
+				if (!listenerId.equals(speakerId)) {
+					authorizedReceivers.add(listenerId);
 				}
 			}
 
-			// 2. Spill audio 6 blocks around physical open-radio holders so nearby players also hear the radio
-			if (channelListeners.contains(receiverId)) {
-				Collection<ServerPlayer> bystanders = api.getPlayersInRange(
-						receiverLevel,
-						emitterPos,
-						RADIO_SPEAKER_DISTANCE
+			if (RadioEavesdropRegistry.hasHooks()) {
+				for (UUID candidateId : RadioNetworkManager.getOnlinePlayers()) {
+					if (!candidateId.equals(speakerId)
+							&& !authorizedReceivers.contains(candidateId)
+							&& RadioEavesdropRegistry.isAuthorized(candidateId, speakerId, channel)) {
+						authorizedReceivers.add(candidateId);
+					}
+				}
+			}
+
+			for (UUID receiverId : authorizedReceivers) {
+				VoicechatConnection receiverConn = api.getConnectionOf(receiverId);
+				if (receiverConn == null) {
+					continue;
+				}
+				ServerPlayer receiverPlayer = receiverConn.getPlayer();
+				if (receiverPlayer == null) {
+					continue;
+				}
+
+				ServerLevel receiverLevel = receiverPlayer.getServerLevel();
+				Position receiverPos = receiverPlayer.getPosition();
+				if (receiverLevel == null || receiverPos == null) {
+					continue;
+				}
+
+				Position emitterPos = api.createPosition(
+						receiverPos.getX(),
+						receiverPos.getY() + RADIO_EMITTER_HEIGHT_OFFSET,
+						receiverPos.getZ()
 				);
-				for (ServerPlayer bystander : bystanders) {
-					UUID bystanderId = bystander.getUuid();
-					if (bystanderId.equals(speakerId)
-							|| playersInDirectProximity.contains(bystanderId)
-							|| deliveredRecipients.contains(bystanderId)) {
+
+				LocationalSoundPacket radioSoundPacket = micPacket.locationalSoundPacketBuilder()
+						.channelId(deriveStreamChannelId(speakerId, receiverId))
+						.sender(speakerId)
+						.opusEncodedData(opusData)
+						.position(emitterPos)
+						.distance(RADIO_SPEAKER_DISTANCE)
+						.category(RADIO_CATEGORY_ID)
+						.build();
+
+				// 1. Deliver to the radio holder / authorized listener if not already within direct proximity of speaker
+				if (receiverConn.isConnected()
+						&& !receiverConn.isDisabled()
+						&& !playersInDirectProximity.contains(receiverId)
+						&& deliveredRecipients.add(receiverId)) {
+					api.sendLocationalSoundPacketTo(receiverConn, radioSoundPacket);
+					if (channelListeners.contains(receiverId)) {
+						RadioNetworkManager.notifyReceivingSignal(receiverId);
+					}
+				}
+
+				// 2. Spill audio 6 blocks around physical open-radio holders so nearby players also hear the radio
+				if (channelListeners.contains(receiverId)) {
+					Collection<ServerPlayer> bystanders = api.getPlayersInRange(
+							receiverLevel,
+							emitterPos,
+							RADIO_SPEAKER_DISTANCE
+					);
+					for (ServerPlayer bystander : bystanders) {
+						UUID bystanderId = bystander.getUuid();
+						if (bystanderId.equals(speakerId)
+								|| playersInDirectProximity.contains(bystanderId)
+								|| deliveredRecipients.contains(bystanderId)) {
+							continue;
+						}
+						VoicechatConnection bystanderConn = api.getConnectionOf(bystander);
+						if (bystanderConn != null && bystanderConn.isConnected() && !bystanderConn.isDisabled()) {
+							deliveredRecipients.add(bystanderId);
+							api.sendLocationalSoundPacketTo(bystanderConn, radioSoundPacket);
+						}
+					}
+				}
+			}
+
+			// 3. Emit 3D locational audio (~16 blocks) from active dropped ground radios on this channel
+			for (RadioNetworkManager.DroppedRadioEntry dropped : droppedRadios) {
+				// Prevent feedback loops out of the capturing hot-mic radio(s) themselves
+				if (capturingHotMicEntityIds.contains(dropped.entityUuid())) {
+					continue;
+				}
+				ItemEntity itemEntity = dropped.entity();
+				if (itemEntity == null || itemEntity.isRemoved() || !itemEntity.isAlive()) {
+					RadioNetworkManager.untrackDroppedRadio(dropped.entityUuid());
+					continue;
+				}
+				Vec3 livePos = itemEntity.position();
+				ServerLevel droppedLevel = api.fromServerLevel(dropped.level());
+				if (droppedLevel == null) {
+					continue;
+				}
+				Position emitterPos = api.createPosition(
+						livePos.x,
+						livePos.y + DROPPED_RADIO_HEIGHT_OFFSET,
+						livePos.z
+				);
+				LocationalSoundPacket groundPacket = micPacket.locationalSoundPacketBuilder()
+						.channelId(deriveStreamChannelId(speakerId, dropped.entityUuid()))
+						.sender(speakerId)
+						.opusEncodedData(opusData)
+						.position(emitterPos)
+						.distance(DROPPED_RADIO_SPEAKER_DISTANCE)
+						.category(RADIO_CATEGORY_ID)
+						.build();
+
+				boolean emittedToAnyone = false;
+				Collection<ServerPlayer> nearby = api.getPlayersInRange(
+						droppedLevel,
+						emitterPos,
+						DROPPED_RADIO_SPEAKER_DISTANCE
+				);
+				for (ServerPlayer listener : nearby) {
+					UUID listenerId = listener.getUuid();
+					// Prevent echo for speaker and nearby direct-proximity listeners on hot-mic capture
+					if (!isDirectPttChannel && (listenerId.equals(speakerId) || playersInDirectProximity.contains(listenerId))) {
 						continue;
 					}
-					VoicechatConnection bystanderConn = api.getConnectionOf(bystander);
-					if (bystanderConn != null && bystanderConn.isConnected() && !bystanderConn.isDisabled()) {
-						deliveredRecipients.add(bystanderId);
-						api.sendLocationalSoundPacketTo(bystanderConn, radioSoundPacket);
+					// Prevent double-audio for players already receiving this channel on their own inventory radio
+					if (!listenerId.equals(speakerId)
+							&& (channelListeners.contains(listenerId) || deliveredRecipients.contains(listenerId))) {
+						continue;
 					}
+					if (deliveredRecipients.contains(listenerId)) {
+						continue;
+					}
+					VoicechatConnection conn = api.getConnectionOf(listener);
+					if (conn != null && conn.isConnected() && !conn.isDisabled()) {
+						deliveredRecipients.add(listenerId);
+						api.sendLocationalSoundPacketTo(conn, groundPacket);
+						emittedToAnyone = true;
+					}
+				}
+				if (emittedToAnyone) {
+					RadioNetworkManager.emitDroppedRadioAudioEffect(dropped);
 				}
 			}
 		}
 
-		// 3. Emit 3D locational audio (~16 blocks) from active dropped ground radios on this channel
-		for (RadioNetworkManager.DroppedRadioEntry dropped : droppedRadios) {
-			ItemEntity itemEntity = dropped.entity();
-			if (itemEntity == null || itemEntity.isRemoved() || !itemEntity.isAlive()) {
-				RadioNetworkManager.untrackDroppedRadio(dropped.entityUuid());
-				continue;
-			}
-			Vec3 livePos = itemEntity.position();
-			ServerLevel droppedLevel = api.fromServerLevel(dropped.level());
-			if (droppedLevel == null) {
-				continue;
-			}
-			Position emitterPos = api.createPosition(
-					livePos.x,
-					livePos.y + DROPPED_RADIO_HEIGHT_OFFSET,
-					livePos.z
-			);
-			LocationalSoundPacket groundPacket = micPacket.locationalSoundPacketBuilder()
-					.channelId(deriveStreamChannelId(speakerId, dropped.entityUuid()))
-					.sender(speakerId)
-					.opusEncodedData(opusData)
-					.position(emitterPos)
-					.distance(DROPPED_RADIO_SPEAKER_DISTANCE)
-					.category(RADIO_CATEGORY_ID)
-					.build();
-
-			boolean emittedToAnyone = false;
-			Collection<ServerPlayer> nearby = api.getPlayersInRange(
-					droppedLevel,
-					emitterPos,
-					DROPPED_RADIO_SPEAKER_DISTANCE
-			);
-			for (ServerPlayer listener : nearby) {
-				UUID listenerId = listener.getUuid();
-				// Prevent double-audio for players already receiving this channel on their own inventory radio
-				if (!listenerId.equals(speakerId)
-						&& (channelListeners.contains(listenerId) || deliveredRecipients.contains(listenerId))) {
-					continue;
-				}
-				VoicechatConnection conn = api.getConnectionOf(listener);
-				if (conn != null && conn.isConnected() && !conn.isDisabled()) {
-					deliveredRecipients.add(listenerId);
-					api.sendLocationalSoundPacketTo(conn, groundPacket);
-					emittedToAnyone = true;
-				}
-			}
-			if (emittedToAnyone) {
-				RadioNetworkManager.emitDroppedRadioAudioEffect(dropped);
-			}
+		for (RadioNetworkManager.DroppedRadioEntry captured : capturingHotMics) {
+			RadioNetworkManager.emitHotMicCaptureEffect(captured);
 		}
 	}
 

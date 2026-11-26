@@ -450,9 +450,10 @@ public final class HandheldRadioModelRenderer {
 			}
 
 			RenderPassInfo.BoneUpdater<GeoRenderState> boneUpdater = (renderPassInfo, snapshots) -> {
+				boolean showTxLed = state.isPowered() && state.isTransmitting();
 				snapshots.ifPresent("led_on", bone -> {
-					bone.skipRender(!state.isPowered());
-					if (state.isPowered() && state.rxIntensity() > 0.01F) {
+					bone.skipRender(!state.isPowered() || showTxLed);
+					if (state.isPowered() && !showTxLed && state.rxIntensity() > 0.01F) {
 						float pulse = 0.5F + 0.5F * Mth.sin(state.rxPhase() * Mth.TWO_PI * 3.0F);
 						float s = 1.0F + 0.25F * pulse * state.rxIntensity();
 						bone.setScaleX(s);
@@ -460,6 +461,7 @@ public final class HandheldRadioModelRenderer {
 						bone.setScaleZ(s);
 					}
 				});
+				snapshots.ifPresent("led_tx", bone -> bone.skipRender(!showTxLed));
 				snapshots.ifPresent("led_off", bone -> bone.skipRender(state.isPowered()));
 
 				snapshots.ifPresent("dial_knob", bone ->

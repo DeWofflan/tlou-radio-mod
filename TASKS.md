@@ -36,3 +36,11 @@
 - [x] `ModSounds` + `sounds.json` (`radio_power_on`, `radio_power_off`, `radio_ptt_start`, `radio_ptt_end`, `radio_sabotage`) ve `tr_tr.json` / `en_us.json` yerelleştirmeleri.
 - [x] Ana Kutu 3D GUI iyileştirmeleri (büyütülmüş 3D model ve kontrol paneli, tam Türkçe metinler, `BaseBoxSaveResultPayload` ile ekranı kapatmayan inline çakışma/hata uyarısı, 3D ön paneldeki 2 büyük kanal tuşu ve simgeli Kaydet + genişletilmiş `FRK/ŞFR`/`Sil` yerleşimi).
 - [x] Yere atılan açık telsizlerden (`ItemEntity`) sıfır-tick `ENTITY_LOAD`/`ENTITY_UNLOAD` takibi ile güncel konumdan 16 blokluk 3D konumsal ses yayını (`LocationalSoundPacket`), yankı koruması ve 250 ms rate-limited partikül geri bildirimi.
+
+## Faz 6A: Dinleme Cihazı (Hot-Mic), Özel .ogg Telsiz Sesleri ve Üretim Eşyaları/Tarifleri [Model: Hydrogen]
+- [x] `RadioStateComponent` içine geriye dönük uyumlu `hotMicLocked` (`hot_mic_locked`) durumunun eklenmesi.
+- [x] Aktif PTT yayınında `Q` / `Ctrl+Q` ile bırakılan el telsizinin erken sıfırlama korumalı (`HOT_MIC_DROPPING_PLAYERS` drop guard) şekilde `hotMicLocked = true` olarak düşürülmesi ve yerden alındığında (`syncPlayer`) otomatik `false` sıfırlanması.
+- [x] `TlouRadioVoicechatPlugin` içinde aynı boyuttaki 12 blokluk yakındaki aktif Hot-Mic telsizlerinden paket başına tek DSP işleme + yankı/sonsuz döngü korumalı ortam sesi yakalama ve yayınlama.
+- [x] Yerdeki Hot-Mic telsiz için kırmızı/turuncu TX LED (`led_tx` + glowmask), basılı PTT mandalı ve `!isPaused()` korumalı seyrek kırmızı partikül görsel ipucunun eklenmesi.
+- [x] `assets/tlouradio/sounds/` altına 5 adet özel mono Ogg Vorbis (`.ogg`) telsiz ses efektinin sentezlenip `sounds.json` ile bağlanması.
+- [x] `pcb_board`, `radio_battery`, `plastic_sheet` eşyalarının 16×16 pixel art dokular, MC 26.3 modelleri, Creative Tab, TR/EN yerelleştirmeler ve `data/tlouradio/recipe/` çalışma masası tarifleriyle (`handheld_radio`, `radio_base_box`) eklenmesi.

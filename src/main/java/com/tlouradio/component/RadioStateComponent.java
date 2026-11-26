@@ -19,7 +19,8 @@ public record RadioStateComponent(
 		String frequency,
 		Optional<UUID> networkId,
 		String passcode,
-		boolean antennaExtended
+		boolean antennaExtended,
+		boolean hotMicLocked
 ) {
 	public static final String DEFAULT_FREQUENCY = "100.0";
 	public static final int MAX_FREQUENCY_LENGTH = 8;
@@ -32,7 +33,8 @@ public record RadioStateComponent(
 			DEFAULT_FREQUENCY,
 			Optional.empty(),
 			"",
-			true
+			true,
+			false
 	);
 
 	public static final Codec<RadioStateComponent> CODEC = RecordCodecBuilder.create(instance -> instance.group(
@@ -40,7 +42,8 @@ public record RadioStateComponent(
 			Codec.STRING.optionalFieldOf("frequency", DEFAULT_FREQUENCY).forGetter(RadioStateComponent::frequency),
 			UUIDUtil.CODEC.optionalFieldOf("network_id").forGetter(RadioStateComponent::networkId),
 			Codec.STRING.optionalFieldOf("passcode", "").forGetter(RadioStateComponent::passcode),
-			Codec.BOOL.optionalFieldOf("antenna_extended", true).forGetter(RadioStateComponent::antennaExtended)
+			Codec.BOOL.optionalFieldOf("antenna_extended", true).forGetter(RadioStateComponent::antennaExtended),
+			Codec.BOOL.optionalFieldOf("hot_mic_locked", false).forGetter(RadioStateComponent::hotMicLocked)
 	).apply(instance, RadioStateComponent::new));
 
 	public static final StreamCodec<RegistryFriendlyByteBuf, RadioStateComponent> STREAM_CODEC = StreamCodec.composite(
@@ -49,6 +52,7 @@ public record RadioStateComponent(
 			ByteBufCodecs.optional(UUIDUtil.STREAM_CODEC), RadioStateComponent::networkId,
 			ByteBufCodecs.STRING_UTF8, RadioStateComponent::passcode,
 			ByteBufCodecs.BOOL, RadioStateComponent::antennaExtended,
+			ByteBufCodecs.BOOL, RadioStateComponent::hotMicLocked,
 			RadioStateComponent::new
 	);
 
@@ -58,7 +62,17 @@ public record RadioStateComponent(
 			Optional<UUID> networkId,
 			String passcode
 	) {
-		this(isPowered, frequency, networkId, passcode, true);
+		this(isPowered, frequency, networkId, passcode, true, false);
+	}
+
+	public RadioStateComponent(
+			boolean isPowered,
+			String frequency,
+			Optional<UUID> networkId,
+			String passcode,
+			boolean antennaExtended
+	) {
+		this(isPowered, frequency, networkId, passcode, antennaExtended, false);
 	}
 
 	public RadioStateComponent {
@@ -68,23 +82,41 @@ public record RadioStateComponent(
 	}
 
 	public RadioStateComponent withPowered(boolean powered) {
-		return new RadioStateComponent(powered, this.frequency, this.networkId, this.passcode, this.antennaExtended);
+		return new RadioStateComponent(
+				powered,
+				this.frequency,
+				this.networkId,
+				this.passcode,
+				this.antennaExtended,
+				powered && this.hotMicLocked
+		);
 	}
 
 	public RadioStateComponent withFrequency(String newFrequency) {
-		return new RadioStateComponent(this.isPowered, newFrequency, this.networkId, this.passcode, this.antennaExtended);
+		return new RadioStateComponent(this.isPowered, newFrequency, this.networkId, this.passcode, this.antennaExtended, this.hotMicLocked);
 	}
 
 	public RadioStateComponent withNetworkId(Optional<UUID> newNetworkId) {
-		return new RadioStateComponent(this.isPowered, this.frequency, newNetworkId, this.passcode, this.antennaExtended);
+		return new RadioStateComponent(this.isPowered, this.frequency, newNetworkId, this.passcode, this.antennaExtended, this.hotMicLocked);
 	}
 
 	public RadioStateComponent withPasscode(String newPasscode) {
-		return new RadioStateComponent(this.isPowered, this.frequency, this.networkId, newPasscode, this.antennaExtended);
+		return new RadioStateComponent(this.isPowered, this.frequency, this.networkId, newPasscode, this.antennaExtended, this.hotMicLocked);
 	}
 
 	public RadioStateComponent withAntennaExtended(boolean extended) {
-		return new RadioStateComponent(this.isPowered, this.frequency, this.networkId, this.passcode, extended);
+		return new RadioStateComponent(
+				this.isPowered,
+				this.frequency,
+				this.networkId,
+				this.passcode,
+				extended,
+				extended && this.hotMicLocked
+		);
+	}
+
+	public RadioStateComponent withHotMicLocked(boolean locked) {
+		return new RadioStateComponent(this.isPowered, this.frequency, this.networkId, this.passcode, this.antennaExtended, locked);
 	}
 
 	public RadioStateComponent withPairedNetwork(UUID pairedNetworkId, String newFrequency, String newPasscode) {
@@ -93,7 +125,8 @@ public record RadioStateComponent(
 				newFrequency,
 				Optional.of(Objects.requireNonNull(pairedNetworkId, "pairedNetworkId")),
 				newPasscode,
-				this.antennaExtended
+				this.antennaExtended,
+				this.hotMicLocked
 		);
 	}
 

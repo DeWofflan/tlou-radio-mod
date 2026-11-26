@@ -25,6 +25,24 @@ public final class ModItems {
 					.component(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT)
 	);
 
+	public static final Item PCB_BOARD = registerItem(
+			"pcb_board",
+			Item::new,
+			new Item.Properties()
+	);
+
+	public static final Item RADIO_BATTERY = registerItem(
+			"radio_battery",
+			Item::new,
+			new Item.Properties()
+	);
+
+	public static final Item PLASTIC_SHEET = registerItem(
+			"plastic_sheet",
+			Item::new,
+			new Item.Properties()
+	);
+
 	public static final CreativeModeTab CREATIVE_TAB = Registry.register(
 			BuiltInRegistries.CREATIVE_MODE_TAB,
 			TlouRadioMod.id("general"),
@@ -34,6 +52,9 @@ public final class ModItems {
 					.displayItems((parameters, output) -> {
 						output.accept(HANDHELD_RADIO);
 						output.accept(ModBlocks.RADIO_BASE_BOX);
+						output.accept(PCB_BOARD);
+						output.accept(RADIO_BATTERY);
+						output.accept(PLASTIC_SHEET);
 					})
 					.build()
 	);

@@ -1,8 +1,11 @@
 package com.tlouradio.mixin;
 
+import com.tlouradio.component.ModDataComponents;
+import com.tlouradio.component.RadioStateComponent;
 import com.tlouradio.item.HandheldRadioItem;
 import com.tlouradio.radio.RadioNetworkManager;
 import net.minecraft.network.protocol.game.ServerboundContainerClickPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
@@ -24,8 +27,58 @@ public abstract class ServerGamePacketListenerImplMixin {
 	private boolean tlouradio$containerClickInvolvedRadio;
 
 	@Unique
+	private boolean tlouradio$hotMicDropArmed;
+
+	@Unique
 	private static boolean tlouradio$isRadio(ItemStack stack) {
 		return stack != null && !stack.isEmpty() && stack.getItem() instanceof HandheldRadioItem;
+	}
+
+	@Inject(method = "handlePlayerAction", at = @At("HEAD"))
+	private void tlouradio$beforePlayerAction(ServerboundPlayerActionPacket packet, CallbackInfo ci) {
+		ServerboundPlayerActionPacket.Action action = packet.getAction();
+		if (action != ServerboundPlayerActionPacket.Action.DROP_ITEM
+				&& action != ServerboundPlayerActionPacket.Action.DROP_ALL_ITEMS) {
+			return;
+		}
+		if (this.player == null || this.player.isSpectator()) {
+			return;
+		}
+		if (!RadioNetworkManager.isTransmitting(this.player.getUUID())) {
+			return;
+		}
+		ItemStack mainHand = this.player.getMainHandItem();
+		if (!tlouradio$isRadio(mainHand)) {
+			return;
+		}
+		RadioStateComponent state = mainHand.getOrDefault(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT);
+		if (!RadioNetworkManager.isRadioStateAuthorized(this.player.level().getServer(), state)) {
+			return;
+		}
+		RadioNetworkManager.beginHotMicDrop(this.player.getUUID());
+		this.tlouradio$hotMicDropArmed = true;
+		mainHand.set(ModDataComponents.RADIO_STATE, state.withHotMicLocked(true));
+	}
+
+	@Inject(method = "handlePlayerAction", at = @At("RETURN"))
+	private void tlouradio$afterPlayerAction(ServerboundPlayerActionPacket packet, CallbackInfo ci) {
+		if (!this.tlouradio$hotMicDropArmed) {
+			return;
+		}
+		this.tlouradio$hotMicDropArmed = false;
+		if (this.player == null) {
+			return;
+		}
+		RadioNetworkManager.endHotMicDrop(this.player.getUUID());
+		// Fallback if the drop was cancelled and the item remained in hand
+		ItemStack mainHand = this.player.getMainHandItem();
+		if (tlouradio$isRadio(mainHand)) {
+			RadioStateComponent state = mainHand.getOrDefault(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT);
+			if (state.hotMicLocked()) {
+				mainHand.set(ModDataComponents.RADIO_STATE, state.withHotMicLocked(false));
+				RadioNetworkManager.syncPlayer(this.player);
+			}
+		}
 	}
 
 	@Inject(method = "handleSetCarriedItem", at = @At("RETURN"))

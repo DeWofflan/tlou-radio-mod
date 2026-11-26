@@ -1,0 +1,18 @@
+{
+	"type": "minecraft:crafting_shaped",
+	"category": "equipment",
+	"key": {
+		"P": "tlouradio:plastic_sheet",
+		"C": "tlouradio:pcb_board",
+		"B": "tlouradio:radio_battery"
+	},
+	"pattern": [
+		"P",
+		"C",
+		"B"
+	],
+	"result": {
+		"id": "tlouradio:handheld_radio",
+		"count": 1
+	}
+}

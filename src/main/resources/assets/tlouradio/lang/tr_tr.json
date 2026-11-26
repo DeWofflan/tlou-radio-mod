@@ -1,5 +1,8 @@
 {
 	"item.tlouradio.handheld_radio": "El Telsizi",
+	"item.tlouradio.pcb_board": "PCB Devre Kartı",
+	"item.tlouradio.radio_battery": "Telsiz Pili",
+	"item.tlouradio.plastic_sheet": "Plastik",
 	"block.tlouradio.radio_base_box": "Ana Telsiz Kutusu",
 	"item.tlouradio.radio_base_box": "Ana Telsiz Kutusu",
 	"itemGroup.tlouradio": "TLOU2 Taktiksel Telsiz",
@@ -39,6 +42,7 @@
 	"tooltip.tlouradio.antenna_closed": "Kapalı (Sinyal Yok)",
 	"tooltip.tlouradio.network_paired": "Ağ: Ana Kutu [%s]",
 	"tooltip.tlouradio.network_open": "Ağ: Açık Frekans",
+	"tooltip.tlouradio.hot_mic_locked": "Dinleme Modu: AÇIK (Yayın Kilitli)",
 	"gui.tlouradio.base_box.title": "Ana Telsiz Kutusu Yönetimi",
 	"gui.tlouradio.base_box.network_id": "Ağ Kimliği: %s",
 	"gui.tlouradio.base_box.lcd_net_id": "AĞ:%s",
