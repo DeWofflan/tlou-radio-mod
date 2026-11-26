@@ -34,3 +34,5 @@
 - [x] Sunucu taraflı Opus DSP telsiz ses filtresi (`RadioAudioDspProcessor`: 300–3000 Hz bandpass + hafif cızırtı, güvenli ham ses fallback'i, konuşmacı bazlı önbellek/temizlik).
 - [x] Rate-limited `RadioReceivingSignalPayload` (150 ms) ile gelen seste mikro-titreşim ve LED/LCD RX nabız parlaması.
 - [x] `ModSounds` + `sounds.json` (`radio_power_on`, `radio_power_off`, `radio_ptt_start`, `radio_ptt_end`, `radio_sabotage`) ve `tr_tr.json` / `en_us.json` yerelleştirmeleri.
+- [x] Ana Kutu 3D GUI iyileştirmeleri (büyütülmüş 3D model ve kontrol paneli, tam Türkçe metinler, `BaseBoxSaveResultPayload` ile ekranı kapatmayan inline çakışma/hata uyarısı, 3D ön paneldeki 2 büyük kanal tuşu ve simgeli Kaydet + genişletilmiş `FRK/ŞFR`/`Sil` yerleşimi).
+- [x] Yere atılan açık telsizlerden (`ItemEntity`) sıfır-tick `ENTITY_LOAD`/`ENTITY_UNLOAD` takibi ile güncel konumdan 16 blokluk 3D konumsal ses yayını (`LocationalSoundPacket`), yankı koruması ve 250 ms rate-limited partikül geri bildirimi.

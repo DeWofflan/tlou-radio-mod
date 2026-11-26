@@ -9,17 +9,22 @@ import com.tlouradio.network.payload.SyncRadioTransmitterPayload;
 import com.tlouradio.sound.ModSounds;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.ChatFormatting;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -36,12 +41,24 @@ import java.util.concurrent.ConcurrentHashMap;
  * Safe to query lock-free from Simple Voice Chat's UDP thread without touching Minecraft main-thread objects.
  */
 public final class RadioNetworkManager {
+	public record DroppedRadioEntry(
+			UUID entityUuid,
+			ItemEntity entity,
+			ServerLevel level,
+			RadioChannelKey channel
+	) {
+	}
+
 	private static final long RX_SIGNAL_RATE_LIMIT_MS = 150L;
+	private static final long DROPPED_PARTICLE_RATE_LIMIT_MS = 250L;
 
 	private static final ConcurrentHashMap<RadioChannelKey, Set<UUID>> CHANNEL_LISTENERS = new ConcurrentHashMap<>();
 	private static final ConcurrentHashMap<UUID, Set<RadioChannelKey>> PLAYER_SUBSCRIPTIONS = new ConcurrentHashMap<>();
 	private static final ConcurrentHashMap<UUID, RadioChannelKey> ACTIVE_TRANSMITTERS = new ConcurrentHashMap<>();
 	private static final ConcurrentHashMap<UUID, Long> LAST_RX_SIGNAL_MS = new ConcurrentHashMap<>();
+	private static final ConcurrentHashMap<RadioChannelKey, Set<DroppedRadioEntry>> DROPPED_RADIOS_BY_CHANNEL = new ConcurrentHashMap<>();
+	private static final ConcurrentHashMap<UUID, DroppedRadioEntry> DROPPED_RADIO_INDEX = new ConcurrentHashMap<>();
+	private static final ConcurrentHashMap<UUID, Long> LAST_DROPPED_PARTICLE_MS = new ConcurrentHashMap<>();
 	private static final Set<UUID> ONLINE_PLAYERS = ConcurrentHashMap.newKeySet();
 
 	private static volatile MinecraftServer activeServer;
@@ -73,6 +90,18 @@ public final class RadioNetworkManager {
 		});
 
 		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> syncPlayer(newPlayer));
+
+		ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> {
+			if (entity instanceof ItemEntity itemEntity) {
+				trackDroppedRadio(world, itemEntity);
+			}
+		});
+
+		ServerEntityEvents.ENTITY_UNLOAD.register((entity, world) -> {
+			if (entity instanceof ItemEntity itemEntity) {
+				untrackDroppedRadio(itemEntity.getUUID());
+			}
+		});
 
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
 			clearAll();
@@ -227,6 +256,14 @@ public final class RadioNetworkManager {
 			}
 		}
 
+		// Also purge any dropped ground radios on invalidated channels of this Base Box
+		for (DroppedRadioEntry dropped : DROPPED_RADIO_INDEX.values()) {
+			RadioChannelKey ch = dropped.channel();
+			if (networkId.equals(ch.networkId().orElse(null)) && !savedData.isValidChannel(ch)) {
+				untrackDroppedRadio(dropped.entityUuid());
+			}
+		}
+
 		if (affectedPlayerIds.isEmpty()) {
 			return;
 		}
@@ -277,6 +314,13 @@ public final class RadioNetworkManager {
 			RadioChannelKey channel = entry.getValue();
 			if (channel.networkId().isEmpty() && normalized.contains(channel.frequency())) {
 				affectedPlayerIds.add(entry.getKey());
+			}
+		}
+
+		for (DroppedRadioEntry dropped : DROPPED_RADIO_INDEX.values()) {
+			RadioChannelKey ch = dropped.channel();
+			if (ch.networkId().isEmpty() && normalized.contains(ch.frequency())) {
+				untrackDroppedRadio(dropped.entityUuid());
 			}
 		}
 
@@ -354,7 +398,118 @@ public final class RadioNetworkManager {
 		PLAYER_SUBSCRIPTIONS.clear();
 		CHANNEL_LISTENERS.clear();
 		LAST_RX_SIGNAL_MS.clear();
+		DROPPED_RADIOS_BY_CHANNEL.clear();
+		DROPPED_RADIO_INDEX.clear();
+		LAST_DROPPED_PARTICLE_MS.clear();
 		ONLINE_PLAYERS.clear();
+	}
+
+	public static void trackDroppedRadio(ServerLevel level, ItemEntity itemEntity) {
+		if (level == null || itemEntity == null || itemEntity.isRemoved()) {
+			return;
+		}
+		ItemStack stack = itemEntity.getItem();
+		if (stack.isEmpty() || !(stack.getItem() instanceof HandheldRadioItem)) {
+			return;
+		}
+		RadioStateComponent state = stack.getOrDefault(ModDataComponents.RADIO_STATE, RadioStateComponent.DEFAULT);
+		if (!isRadioStateAuthorized(level.getServer(), state)) {
+			return;
+		}
+		UUID entityId = itemEntity.getUUID();
+		RadioChannelKey channel = state.toChannelKey();
+		DroppedRadioEntry entry = new DroppedRadioEntry(entityId, itemEntity, level, channel);
+		DroppedRadioEntry previous = DROPPED_RADIO_INDEX.put(entityId, entry);
+		if (previous != null) {
+			removeDroppedFromChannel(previous.channel(), previous);
+		}
+		DROPPED_RADIOS_BY_CHANNEL.computeIfAbsent(channel, ignored -> ConcurrentHashMap.newKeySet()).add(entry);
+	}
+
+	public static void untrackDroppedRadio(UUID entityUuid) {
+		if (entityUuid == null) {
+			return;
+		}
+		LAST_DROPPED_PARTICLE_MS.remove(entityUuid);
+		DroppedRadioEntry removed = DROPPED_RADIO_INDEX.remove(entityUuid);
+		if (removed != null) {
+			removeDroppedFromChannel(removed.channel(), removed);
+		}
+	}
+
+	private static void removeDroppedFromChannel(RadioChannelKey channel, DroppedRadioEntry entry) {
+		DROPPED_RADIOS_BY_CHANNEL.computeIfPresent(channel, (key, set) -> {
+			set.remove(entry);
+			return set.isEmpty() ? null : set;
+		});
+	}
+
+	/**
+	 * Thread-safe snapshot of active dropped ground radios tuned to {@code channel}, called on SVC's UDP thread.
+	 */
+	public static Set<DroppedRadioEntry> getDroppedRadios(RadioChannelKey channel) {
+		Set<DroppedRadioEntry> entries = DROPPED_RADIOS_BY_CHANNEL.get(channel);
+		if (entries == null || entries.isEmpty()) {
+			return Collections.emptySet();
+		}
+		return Set.copyOf(entries);
+	}
+
+	/**
+	 * Rate-limited (250 ms) visual speaker spark/signal effect above an actively emitting dropped ground radio.
+	 */
+	public static void emitDroppedRadioAudioEffect(DroppedRadioEntry entry) {
+		if (entry == null) {
+			return;
+		}
+		MinecraftServer server = activeServer;
+		if (server == null) {
+			return;
+		}
+		UUID entityId = entry.entityUuid();
+		long now = System.currentTimeMillis();
+		Long prev = LAST_DROPPED_PARTICLE_MS.get(entityId);
+		if (prev != null && (now - prev) < DROPPED_PARTICLE_RATE_LIMIT_MS) {
+			return;
+		}
+		if (prev == null) {
+			if (LAST_DROPPED_PARTICLE_MS.putIfAbsent(entityId, now) != null) {
+				return;
+			}
+		} else if (!LAST_DROPPED_PARTICLE_MS.replace(entityId, prev, now)) {
+			return;
+		}
+
+		server.execute(() -> {
+			ItemEntity entity = entry.entity();
+			if (entity == null || entity.isRemoved() || !entity.isAlive()) {
+				untrackDroppedRadio(entityId);
+				return;
+			}
+			Vec3 pos = entity.position();
+			entry.level().sendParticles(
+					ParticleTypes.ELECTRIC_SPARK,
+					pos.x,
+					pos.y + 0.42D,
+					pos.z,
+					2,
+					0.09D,
+					0.06D,
+					0.09D,
+					0.01D
+			);
+			entry.level().sendParticles(
+					ParticleTypes.NOTE,
+					pos.x,
+					pos.y + 0.56D,
+					pos.z,
+					1,
+					0.06D,
+					0.04D,
+					0.06D,
+					0.0D
+			);
+		});
 	}
 
 	public static boolean isTrackingPlayer(UUID playerId) {

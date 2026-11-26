@@ -12,6 +12,7 @@ import com.tlouradio.client.gui.render.HandheldRadioModelRenderer;
 import com.tlouradio.client.renderer.HandheldRadioGeoItemRenderer;
 import com.tlouradio.client.renderer.RadioBaseBoxGeoRenderer;
 import com.tlouradio.client.renderer.RadioBaseBoxItemGeoRenderer;
+import com.tlouradio.network.payload.BaseBoxSaveResultPayload;
 import com.tlouradio.network.payload.OpenBaseBoxScreenPayload;
 import com.tlouradio.network.payload.RadioReceivingSignalPayload;
 import com.tlouradio.network.payload.SyncRadioTransmitterPayload;
@@ -84,6 +85,12 @@ public class TlouRadioClient implements ClientModInitializer {
 		ClientPlayNetworking.registerGlobalReceiver(RadioReceivingSignalPayload.TYPE, (payload, context) ->
 				RadioClientState.markReceivingSignal()
 		);
+
+		ClientPlayNetworking.registerGlobalReceiver(BaseBoxSaveResultPayload.TYPE, (payload, context) -> {
+			if (context.client().gui.screen() instanceof RadioBaseBoxScreen screen) {
+				screen.handleServerSaveResult(payload.success(), payload.message());
+			}
+		});
 
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> RadioClientState.clear());
 	}

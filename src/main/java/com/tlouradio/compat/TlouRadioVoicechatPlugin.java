@@ -19,6 +19,8 @@ import de.maxhenkel.voicechat.api.events.VoicechatServerStartedEvent;
 import de.maxhenkel.voicechat.api.events.VoicechatServerStoppedEvent;
 import de.maxhenkel.voicechat.api.packets.LocationalSoundPacket;
 import de.maxhenkel.voicechat.api.packets.MicrophonePacket;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.phys.Vec3;
 
 import java.nio.ByteBuffer;
 import java.util.Collection;
@@ -31,7 +33,9 @@ import java.util.UUID;
 public class TlouRadioVoicechatPlugin implements VoicechatPlugin {
 	public static final String RADIO_CATEGORY_ID = "tlouradio";
 	public static final float RADIO_SPEAKER_DISTANCE = 6.0F;
+	public static final float DROPPED_RADIO_SPEAKER_DISTANCE = 16.0F;
 	private static final double RADIO_EMITTER_HEIGHT_OFFSET = 1.2D;
+	private static final double DROPPED_RADIO_HEIGHT_OFFSET = 0.25D;
 
 	@Override
 	public String getPluginId() {
@@ -97,6 +101,7 @@ public class TlouRadioVoicechatPlugin implements VoicechatPlugin {
 
 		RadioChannelKey channel = activeChannelOpt.get();
 		Set<UUID> channelListeners = RadioNetworkManager.getChannelListeners(channel);
+		Set<RadioNetworkManager.DroppedRadioEntry> droppedRadios = RadioNetworkManager.getDroppedRadios(channel);
 
 		Set<UUID> authorizedReceivers = new LinkedHashSet<>();
 		for (UUID listenerId : channelListeners) {
@@ -115,7 +120,7 @@ public class TlouRadioVoicechatPlugin implements VoicechatPlugin {
 			}
 		}
 
-		if (authorizedReceivers.isEmpty()) {
+		if (authorizedReceivers.isEmpty() && droppedRadios.isEmpty()) {
 			return;
 		}
 
@@ -204,6 +209,57 @@ public class TlouRadioVoicechatPlugin implements VoicechatPlugin {
 						api.sendLocationalSoundPacketTo(bystanderConn, radioSoundPacket);
 					}
 				}
+			}
+		}
+
+		// 3. Emit 3D locational audio (~16 blocks) from active dropped ground radios on this channel
+		for (RadioNetworkManager.DroppedRadioEntry dropped : droppedRadios) {
+			ItemEntity itemEntity = dropped.entity();
+			if (itemEntity == null || itemEntity.isRemoved() || !itemEntity.isAlive()) {
+				RadioNetworkManager.untrackDroppedRadio(dropped.entityUuid());
+				continue;
+			}
+			Vec3 livePos = itemEntity.position();
+			ServerLevel droppedLevel = api.fromServerLevel(dropped.level());
+			if (droppedLevel == null) {
+				continue;
+			}
+			Position emitterPos = api.createPosition(
+					livePos.x,
+					livePos.y + DROPPED_RADIO_HEIGHT_OFFSET,
+					livePos.z
+			);
+			LocationalSoundPacket groundPacket = micPacket.locationalSoundPacketBuilder()
+					.channelId(deriveStreamChannelId(speakerId, dropped.entityUuid()))
+					.sender(speakerId)
+					.opusEncodedData(opusData)
+					.position(emitterPos)
+					.distance(DROPPED_RADIO_SPEAKER_DISTANCE)
+					.category(RADIO_CATEGORY_ID)
+					.build();
+
+			boolean emittedToAnyone = false;
+			Collection<ServerPlayer> nearby = api.getPlayersInRange(
+					droppedLevel,
+					emitterPos,
+					DROPPED_RADIO_SPEAKER_DISTANCE
+			);
+			for (ServerPlayer listener : nearby) {
+				UUID listenerId = listener.getUuid();
+				// Prevent double-audio for players already receiving this channel on their own inventory radio
+				if (!listenerId.equals(speakerId)
+						&& (channelListeners.contains(listenerId) || deliveredRecipients.contains(listenerId))) {
+					continue;
+				}
+				VoicechatConnection conn = api.getConnectionOf(listener);
+				if (conn != null && conn.isConnected() && !conn.isDisabled()) {
+					deliveredRecipients.add(listenerId);
+					api.sendLocationalSoundPacketTo(conn, groundPacket);
+					emittedToAnyone = true;
+				}
+			}
+			if (emittedToAnyone) {
+				RadioNetworkManager.emitDroppedRadioAudioEffect(dropped);
 			}
 		}
 	}

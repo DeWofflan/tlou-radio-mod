@@ -4,6 +4,7 @@ import com.tlouradio.block.entity.RadioBaseBoxBlockEntity;
 import com.tlouradio.component.ModDataComponents;
 import com.tlouradio.component.RadioStateComponent;
 import com.tlouradio.item.HandheldRadioItem;
+import com.tlouradio.network.payload.BaseBoxSaveResultPayload;
 import com.tlouradio.network.payload.OpenBaseBoxScreenPayload;
 import com.tlouradio.network.payload.RadioPttPayload;
 import com.tlouradio.network.payload.RadioReceivingSignalPayload;
@@ -47,6 +48,10 @@ public final class ModNetworking {
 		PayloadTypeRegistry.clientboundPlay().register(
 				RadioReceivingSignalPayload.TYPE,
 				RadioReceivingSignalPayload.STREAM_CODEC
+		);
+		PayloadTypeRegistry.clientboundPlay().register(
+				BaseBoxSaveResultPayload.TYPE,
+				BaseBoxSaveResultPayload.STREAM_CODEC
 		);
 
 		PayloadTypeRegistry.serverboundPlay().register(
@@ -155,9 +160,8 @@ public final class ModNetworking {
 
 			if (payload.channels() == null || payload.channels().isEmpty()
 					|| payload.channels().size() > RadioBaseNetworkSavedData.MAX_CHANNELS_PER_BOX) {
-				player.sendOverlayMessage(
-						Component.translatable("message.tlouradio.base_box_invalid_input").withStyle(ChatFormatting.RED)
-				);
+				Component err = Component.translatable("message.tlouradio.base_box_invalid_input").withStyle(ChatFormatting.RED);
+				sendBaseBoxSaveResult(player, false, err);
 				return;
 			}
 
@@ -168,20 +172,16 @@ public final class ModNetworking {
 			);
 
 			if (!result.success()) {
+				Component err;
 				if (result.conflictFrequency().isPresent()) {
-					player.sendOverlayMessage(
-							Component.translatable("message.tlouradio.base_box_freq_conflict", result.conflictFrequency().get())
-									.withStyle(ChatFormatting.RED)
-					);
+					err = Component.translatable("message.tlouradio.base_box_freq_conflict", result.conflictFrequency().get())
+							.withStyle(ChatFormatting.RED);
 				} else if (result.duplicateInRequest()) {
-					player.sendOverlayMessage(
-							Component.translatable("message.tlouradio.base_box_freq_duplicate").withStyle(ChatFormatting.RED)
-					);
+					err = Component.translatable("message.tlouradio.base_box_freq_duplicate").withStyle(ChatFormatting.RED);
 				} else {
-					player.sendOverlayMessage(
-							Component.translatable("message.tlouradio.base_box_invalid_input").withStyle(ChatFormatting.RED)
-					);
+					err = Component.translatable("message.tlouradio.base_box_invalid_input").withStyle(ChatFormatting.RED);
 				}
+				sendBaseBoxSaveResult(player, false, err);
 				return;
 			}
 
@@ -193,13 +193,13 @@ public final class ModNetworking {
 				RadioNetworkManager.revalidateFreeListenersForFrequencies(server, result.newlyClaimedFrequencies());
 			}
 
-			player.sendOverlayMessage(
-					Component.translatable(
-							"message.tlouradio.base_box_saved_multi",
-							baseBox.getSelectedChannel().frequency(),
-							baseBox.getChannels().size()
-					).withStyle(ChatFormatting.GREEN)
-			);
+			Component okMsg = Component.translatable(
+					"message.tlouradio.base_box_saved_multi",
+					baseBox.getSelectedChannel().frequency(),
+					baseBox.getChannels().size()
+			).withStyle(ChatFormatting.GREEN);
+			player.sendOverlayMessage(okMsg);
+			sendBaseBoxSaveResult(player, true, okMsg);
 		});
 
 		ServerPlayNetworking.registerGlobalReceiver(UpdateHandheldRadioPayload.TYPE, (payload, context) -> {
@@ -373,6 +373,13 @@ public final class ModNetworking {
 					.withStyle(ChatFormatting.GREEN);
 		}
 		player.sendOverlayMessage(statusMessage);
+	}
+
+	private static void sendBaseBoxSaveResult(ServerPlayer player, boolean success, Component message) {
+		if (player != null && !player.hasDisconnected()
+				&& ServerPlayNetworking.canSend(player, BaseBoxSaveResultPayload.TYPE)) {
+			ServerPlayNetworking.send(player, new BaseBoxSaveResultPayload(success, message));
+		}
 	}
 
 	private static ItemStack getValidatedHeldRadio(ServerPlayer player, InteractionHand hand) {

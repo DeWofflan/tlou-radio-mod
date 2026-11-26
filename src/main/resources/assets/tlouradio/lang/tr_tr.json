@@ -44,7 +44,7 @@
 	"gui.tlouradio.base_box.lcd_net_id": "AĞ:%s",
 	"gui.tlouradio.base_box.lcd_net_channel": "AĞ:%s K%s/%s",
 	"gui.tlouradio.base_box.channel_add": "+ Kanal Ekle",
-	"gui.tlouradio.base_box.channel_remove": "Sil",
+	"gui.tlouradio.base_box.channel_remove": "Kanal Sil",
 	"gui.tlouradio.base_box.frequency": "Frekans (MHz)",
 	"gui.tlouradio.base_box.passcode": "Sayısal Şifre",
 	"gui.tlouradio.base_box.passcode_hint": "İsteğe bağlı (0-9)",

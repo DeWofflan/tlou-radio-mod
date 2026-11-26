@@ -33,7 +33,8 @@ import java.util.UUID;
 
 /**
  * 3D Field Station inspection & multi-channel configuration screen for {@code RadioBaseBoxBlock}.
- * Supports up to 8 (frequency, passcode) channels per Base Box.
+ * Supports up to 8 (frequency, passcode) channels per Base Box, inline conflict feedback without closing,
+ * and clickable 3D front-panel channel prev/next buttons.
  */
 public class RadioBaseBoxScreen extends Screen {
 	private static final double DIAL_PIXELS_PER_DETENT = 10.0D;
@@ -75,6 +76,10 @@ public class RadioBaseBoxScreen extends Screen {
 
 	private InputMode inputMode = InputMode.FREQUENCY;
 	private int invalidFlashTicks = 0;
+
+	private boolean awaitingSaveResult = false;
+	private Component inlineWarningMessage = null;
+	private int inlineWarningTicks = 0;
 
 	private boolean draggingMainDial = false;
 	private double dialDragResidualPx = 0.0D;
@@ -120,6 +125,27 @@ public class RadioBaseBoxScreen extends Screen {
 		return this.channels.get(this.selectedChannelIndex);
 	}
 
+	/**
+	 * Called when the server responds with {@code BaseBoxSaveResultPayload}.
+	 */
+	public void handleServerSaveResult(boolean success, Component message) {
+		this.awaitingSaveResult = false;
+		if (success) {
+			this.inlineWarningMessage = null;
+			this.inlineWarningTicks = 0;
+			initiateSmoothClose();
+		} else {
+			showInlineWarning(message);
+		}
+	}
+
+	private void showInlineWarning(Component message) {
+		this.inlineWarningMessage = message;
+		this.inlineWarningTicks = 100; // ~5 seconds
+		this.invalidFlashTicks = 16;
+		playTactileBeep(0.55F, 0.34F);
+	}
+
 	@Override
 	protected void init() {
 		this.layout = BaseBoxModelRenderer.computeLayout(this.width, this.height);
@@ -127,14 +153,14 @@ public class RadioBaseBoxScreen extends Screen {
 	}
 
 	private void buildTacticalControlDeck(BaseBoxModelRenderer.StationLayout d) {
-		int padX = d.deckX() + 6;
-		int padY = d.deckY() + 6;
-		int innerW = d.deckWidth() - 12;
+		int padX = d.deckX() + 7;
+		int padY = d.deckY() + 7;
+		int innerW = d.deckWidth() - 14;
 
 		// Row A: Compact channel selector slots 1..8
 		int slotGap = 2;
 		int slotW = (innerW - (slotGap * 7)) / 8;
-		int slotH = 15;
+		int slotH = 17;
 		for (int i = 0; i < RadioBaseNetworkSavedData.MAX_CHANNELS_PER_BOX; i++) {
 			final int slotIdx = i;
 			int sx = padX + i * (slotW + slotGap);
@@ -151,11 +177,14 @@ public class RadioBaseBoxScreen extends Screen {
 			);
 		}
 
-		// Row B: + Kanal Ekle | Sil
-		int actionY = padY + slotH + 3;
-		int actionH = 15;
-		int addW = (innerW - 3) * 2 / 3;
-		int remW = innerW - 3 - addW;
+		// Row B: [+ Kanal Ekle] [Kaydet (icon)] [Kanal Sil]
+		int actionY = padY + slotH + 4;
+		int actionH = 18;
+		int gapAct = 3;
+		int addW = 76;
+		int saveW = 66;
+		int remW = innerW - addW - saveW - (gapAct * 2);
+
 		addDeckKey(
 				"CH_ADD",
 				Component.translatable("gui.tlouradio.base_box.channel_add"),
@@ -168,9 +197,20 @@ public class RadioBaseBoxScreen extends Screen {
 				this::addChannel
 		);
 		addDeckKey(
+				"SAVE",
+				Component.translatable("gui.tlouradio.base_box.save"),
+				padX + addW + gapAct,
+				actionY,
+				saveW,
+				actionH,
+				DeckRole.SAVE,
+				-1,
+				this::submitSaveRequest
+		);
+		addDeckKey(
 				"CH_REM",
 				Component.translatable("gui.tlouradio.base_box.channel_remove"),
-				padX + addW + 3,
+				padX + addW + gapAct + saveW + gapAct,
 				actionY,
 				remW,
 				actionH,
@@ -180,12 +220,12 @@ public class RadioBaseBoxScreen extends Screen {
 		);
 
 		// Keypad rows below channel bar
-		int keypadTopY = actionY + actionH + 5;
+		int keypadTopY = actionY + actionH + 6;
 		int gapX = 3;
 		int gapY = 3;
-		int keyW = 28;
+		int keyW = 32;
 		int funcW = innerW - (keyW * 4 + gapX * 4);
-		int rowH = 19;
+		int rowH = 21;
 
 		int c0 = padX;
 		int c1 = c0 + keyW + gapX;
@@ -202,20 +242,24 @@ public class RadioBaseBoxScreen extends Screen {
 		addDeckKey("2", Component.literal("2"), c1, r0, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('2'));
 		addDeckKey("3", Component.literal("3"), c2, r0, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('3'));
 		addDeckKey("4", Component.literal("4"), c3, r0, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('4'));
-		addDeckKey("MODE", Component.translatable("gui.tlouradio.handheld.key_mode"), c4, r0, funcW, rowH, DeckRole.MODE, -1, this::toggleInputMode);
 
 		addDeckKey("5", Component.literal("5"), c0, r1, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('5'));
 		addDeckKey("6", Component.literal("6"), c1, r1, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('6'));
 		addDeckKey("7", Component.literal("7"), c2, r1, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('7'));
 		addDeckKey("8", Component.literal("8"), c3, r1, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('8'));
-		addDeckKey("DEL", Component.translatable("gui.tlouradio.handheld.key_delete"), c4, r1, funcW, rowH, DeckRole.DELETE, -1, this::handleDelete);
 
 		addDeckKey("9", Component.literal("9"), c0, r2, keyW, rowH, DeckRole.DIGIT, -1, () -> handleDigit('9'));
 		addDeckKey("0", Component.literal("0"), c1, r2, keyW * 2 + gapX, rowH, DeckRole.DIGIT, -1, () -> handleDigit('0'));
 		addDeckKey(".", Component.literal("."), c3, r2, keyW, rowH, DeckRole.DIGIT, -1, this::handleDot);
-		addDeckKey("SAVE", Component.translatable("gui.tlouradio.base_box.save"), c4, r2, funcW, rowH, DeckRole.SAVE, -1, this::submitAndClose);
 
-		addDeckKey("ESC", Component.translatable("gui.tlouradio.base_box.cancel"), c0, r3, innerW, 17, DeckRole.CANCEL, -1, this::initiateSmoothClose);
+		// Right function column: FRK/ŞFR and Sil expanded vertically to evenly span all 3 keypad rows
+		int totalKeypadH = (rowH * 3) + (gapY * 2); // 69px
+		int topFuncH = (totalKeypadH - gapY) / 2;   // 33px
+		int botFuncH = totalKeypadH - gapY - topFuncH; // 33px
+		addDeckKey("MODE", Component.translatable("gui.tlouradio.handheld.key_mode"), c4, r0, funcW, topFuncH, DeckRole.MODE, -1, this::toggleInputMode);
+		addDeckKey("DEL", Component.translatable("gui.tlouradio.handheld.key_delete"), c4, r0 + topFuncH + gapY, funcW, botFuncH, DeckRole.DELETE, -1, this::handleDelete);
+
+		addDeckKey("ESC", Component.translatable("gui.tlouradio.base_box.cancel"), c0, r3, innerW, 19, DeckRole.CANCEL, -1, this::initiateSmoothClose);
 	}
 
 	private void addDeckKey(
@@ -245,6 +289,15 @@ public class RadioBaseBoxScreen extends Screen {
 		this.targetDialAngleDeg = HandheldRadioGeoItemRenderer.computeDialAngleRad(currentChannel().frequency) * Mth.RAD_TO_DEG;
 		triggerDeckKeyAnim("CH_" + index, 0.0F);
 		playTactileBeep(1.30F + index * 0.05F, 0.28F);
+	}
+
+	private void stepSelectedChannel(int delta) {
+		if (this.channels.size() <= 1) {
+			playMechanicalClick(0.75F, 0.24F);
+			return;
+		}
+		int next = Math.floorMod(this.selectedChannelIndex + delta, this.channels.size());
+		selectChannel(next);
 	}
 
 	private void addChannel() {
@@ -292,6 +345,12 @@ public class RadioBaseBoxScreen extends Screen {
 		if (this.invalidFlashTicks > 0) {
 			this.invalidFlashTicks--;
 		}
+		if (this.inlineWarningTicks > 0) {
+			this.inlineWarningTicks--;
+			if (this.inlineWarningTicks == 0) {
+				this.inlineWarningMessage = null;
+			}
+		}
 		if (this.minecraft.player == null
 				|| !this.minecraft.player.isAlive()
 				|| this.minecraft.player.isSpectator()
@@ -325,18 +384,38 @@ public class RadioBaseBoxScreen extends Screen {
 		);
 	}
 
+	private HandheldRadioModelRenderer.ProjectedBounds getPrevChannel3DHitbox() {
+		return BaseBoxModelRenderer.projectGeoBoxToScreen(
+				this.layout, -2.5F, 1.6F, -6.65F, -1.0F, 3.1F, -6.05F
+		);
+	}
+
+	private HandheldRadioModelRenderer.ProjectedBounds getNextChannel3DHitbox() {
+		return BaseBoxModelRenderer.projectGeoBoxToScreen(
+				this.layout, -0.5F, 1.6F, -6.65F, 1.0F, 3.1F, -6.05F
+		);
+	}
+
 	@Override
 	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
 		if (this.transition.isClosing()) {
 			return true;
 		}
-		if (event.button() == InputConstants.MOUSE_BUTTON_LEFT
-				&& this.layout != null
-				&& getMainDialHitbox().contains(event.x(), event.y())) {
-			this.draggingMainDial = true;
-			this.dialDragResidualPx = 0.0D;
-			playMechanicalClick(1.45F, 0.22F);
-			return true;
+		if (event.button() == InputConstants.MOUSE_BUTTON_LEFT && this.layout != null) {
+			if (getMainDialHitbox().contains(event.x(), event.y())) {
+				this.draggingMainDial = true;
+				this.dialDragResidualPx = 0.0D;
+				playMechanicalClick(1.45F, 0.22F);
+				return true;
+			}
+			if (getPrevChannel3DHitbox().contains(event.x(), event.y())) {
+				stepSelectedChannel(-1);
+				return true;
+			}
+			if (getNextChannel3DHitbox().contains(event.x(), event.y())) {
+				stepSelectedChannel(1);
+				return true;
+			}
 		}
 		return super.mouseClicked(event, doubleClick);
 	}
@@ -479,7 +558,11 @@ public class RadioBaseBoxScreen extends Screen {
 		playTactileBeep(this.inputMode == InputMode.PASSCODE ? 1.36F : 1.50F, 0.34F);
 	}
 
-	private void submitAndClose() {
+	private void submitSaveRequest() {
+		if (this.awaitingSaveResult) {
+			return;
+		}
+
 		List<RadioBaseChannel> payloadChannels = new ArrayList<>(this.channels.size());
 		Set<String> seenNormalized = new HashSet<>();
 
@@ -487,15 +570,15 @@ public class RadioBaseBoxScreen extends Screen {
 			EditableChannel ch = this.channels.get(i);
 			if (!RadioStateComponent.isValidFrequency(ch.frequency) || !RadioStateComponent.isValidPasscode(ch.passcode)) {
 				this.selectedChannelIndex = i;
-				this.invalidFlashTicks = 14;
-				rejectKey("SAVE");
+				triggerDeckKeyAnim("SAVE", 0.0F);
+				showInlineWarning(Component.translatable("message.tlouradio.base_box_invalid_input"));
 				return;
 			}
 			String norm = RadioStateComponent.normalizeFrequency(ch.frequency);
 			if (!seenNormalized.add(norm)) {
 				this.selectedChannelIndex = i;
-				this.invalidFlashTicks = 14;
-				rejectKey("SAVE");
+				triggerDeckKeyAnim("SAVE", 0.0F);
+				showInlineWarning(Component.translatable("message.tlouradio.base_box_freq_duplicate"));
 				return;
 			}
 			payloadChannels.add(new RadioBaseChannel(norm, ch.passcode));
@@ -504,13 +587,15 @@ public class RadioBaseBoxScreen extends Screen {
 		triggerDeckKeyAnim("SAVE", 20.0F);
 		playTactileBeep(1.78F, 0.42F);
 		if (ClientPlayNetworking.canSend(UpdateBaseBoxConfigPayload.TYPE)) {
+			this.awaitingSaveResult = true;
 			ClientPlayNetworking.send(new UpdateBaseBoxConfigPayload(
 					this.blockPos,
 					payloadChannels,
 					this.selectedChannelIndex
 			));
+		} else {
+			initiateSmoothClose();
 		}
-		initiateSmoothClose();
 	}
 
 	private void rejectKey(String keyId) {
@@ -583,7 +668,7 @@ public class RadioBaseBoxScreen extends Screen {
 			return true;
 		}
 		if (key == InputConstants.KEY_RETURN || key == InputConstants.KEY_NUMPADENTER) {
-			submitAndClose();
+			submitSaveRequest();
 			return true;
 		}
 		if (key == InputConstants.KEY_TAB) {
@@ -643,9 +728,25 @@ public class RadioBaseBoxScreen extends Screen {
 		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
 
 		if (focus > 0.65F && !this.transition.isClosing()) {
+			// Interactive 3D hover overlays (main dial + 2 large front-panel channel buttons)
 			HandheldRadioModelRenderer.ProjectedBounds dialBox = getMainDialHitbox();
 			if (this.draggingMainDial || dialBox.contains(mouseX, mouseY)) {
 				HandheldRadioModelRenderer.extractDialHoverArrows(graphics, dialBox);
+			}
+
+			HandheldRadioModelRenderer.ProjectedBounds prevBtn = getPrevChannel3DHitbox();
+			if (prevBtn.contains(mouseX, mouseY)) {
+				render3DChannelButtonHighlight(graphics, prevBtn, "<");
+			}
+
+			HandheldRadioModelRenderer.ProjectedBounds nextBtn = getNextChannel3DHitbox();
+			if (nextBtn.contains(mouseX, mouseY)) {
+				render3DChannelButtonHighlight(graphics, nextBtn, ">");
+			}
+
+			// Inline error/conflict banner (keeps screen open on conflict or invalid input)
+			if (this.inlineWarningMessage != null && this.inlineWarningTicks > 0) {
+				renderInlineWarningBanner(graphics, dx, dy, dw);
 			}
 
 			int alpha = Math.round(0xB4 * ((focus - 0.65F) / 0.35F));
@@ -658,6 +759,48 @@ public class RadioBaseBoxScreen extends Screen {
 			graphics.pose().scale(scale, scale);
 			graphics.text(this.font, hint, -tw / 2, 0, (alpha << 24) | 0xC6D0CA, true);
 			graphics.pose().popMatrix();
+		}
+	}
+
+	private void render3DChannelButtonHighlight(
+			GuiGraphicsExtractor graphics,
+			HandheldRadioModelRenderer.ProjectedBounds bounds,
+			String glyph
+	) {
+		int x0 = Math.round(bounds.minX()) - 1;
+		int y0 = Math.round(bounds.minY()) - 1;
+		int x1 = Math.round(bounds.maxX()) + 1;
+		int y1 = Math.round(bounds.maxY()) + 1;
+		graphics.fill(x0, y0, x1, y1, 0x3878FFAE);
+		graphics.outline(x0, y0, Math.max(2, x1 - x0), Math.max(2, y1 - y0), 0xE688FFB8);
+		graphics.centeredText(this.font, Component.literal(glyph), bounds.centerX(), bounds.centerY() - 4, 0xFFFFFFFF);
+	}
+
+	private void renderInlineWarningBanner(GuiGraphicsExtractor graphics, int deckX, int deckY, int deckWidth) {
+		int bannerH = 18;
+		int bannerW = Math.max(deckWidth, Math.min(this.width - 20, this.font.width(this.inlineWarningMessage) + 18));
+		int bx = this.layout.centerX() - (bannerW / 2);
+		int by = Math.max(8, deckY - bannerH - 4);
+
+		boolean flash = this.invalidFlashTicks > 0 && ((this.invalidFlashTicks / 2) % 2 == 0);
+		int bg = flash ? 0xF05E1B16 : 0xEB3B1410;
+		int border = flash ? 0xFFFF8A65 : 0xFFE66A4A;
+		int textCol = 0xFFFFE0B2;
+
+		graphics.fill(bx, by, bx + bannerW, by + bannerH, bg);
+		graphics.outline(bx, by, bannerW, bannerH, border);
+
+		int tw = this.font.width(this.inlineWarningMessage);
+		float maxW = bannerW - 10.0F;
+		if (tw > maxW && tw > 0) {
+			float s = maxW / (float) tw;
+			graphics.pose().pushMatrix();
+			graphics.pose().translate(bx + bannerW / 2.0F, by + bannerH / 2.0F - 4.0F * s);
+			graphics.pose().scale(s, s);
+			graphics.text(this.font, this.inlineWarningMessage, -tw / 2, 0, textCol, true);
+			graphics.pose().popMatrix();
+		} else {
+			graphics.centeredText(this.font, this.inlineWarningMessage, bx + bannerW / 2, by + (bannerH - 8) / 2, textCol);
 		}
 	}
 
@@ -780,6 +923,29 @@ public class RadioBaseBoxScreen extends Screen {
 			graphics.outline(x, y, w, h - (depressed ? 0 : 1), border);
 
 			Component label = getMessage();
+			if (this.role == DeckRole.SAVE) {
+				// Compact pixel-art floppy/save icon + label
+				int iconSize = 8;
+				int iconX = x + 6;
+				int iconY = y + (h - iconSize) / 2;
+				drawSaveIcon(graphics, iconX, iconY, disabled ? 0xFF5A635D : 0xFFB8FFD4);
+
+				int textAreaX = iconX + iconSize + 3;
+				int textAreaW = Math.max(8, (x + w - 4) - textAreaX);
+				int tw = RadioBaseBoxScreen.this.font.width(label);
+				if (tw > textAreaW && tw > 0) {
+					float s = (float) textAreaW / (float) tw;
+					graphics.pose().pushMatrix();
+					graphics.pose().translate(textAreaX + textAreaW / 2.0F, y + (h - 1) / 2.0F - 4.0F * s);
+					graphics.pose().scale(s, s);
+					graphics.text(RadioBaseBoxScreen.this.font, label, -tw / 2, 0, textCol, true);
+					graphics.pose().popMatrix();
+				} else {
+					graphics.centeredText(RadioBaseBoxScreen.this.font, label, textAreaX + textAreaW / 2, y + (h - 9) / 2, textCol);
+				}
+				return;
+			}
+
 			int tw = RadioBaseBoxScreen.this.font.width(label);
 			float maxW = w - 4.0F;
 			if (tw > maxW && tw > 0) {
@@ -794,11 +960,22 @@ public class RadioBaseBoxScreen extends Screen {
 			}
 		}
 
+		private void drawSaveIcon(GuiGraphicsExtractor graphics, int x, int y, int col) {
+			// Outer floppy shell (8x8)
+			graphics.fill(x, y, x + 7, y + 8, col);
+			graphics.fill(x + 7, y + 1, x + 8, y + 8, col);
+			// Top metal shutter cutout
+			graphics.fill(x + 2, y + 1, x + 5, y + 3, 0xFF1A3A28);
+			// Bottom label window
+			graphics.fill(x + 2, y + 5, x + 6, y + 7, 0xFF1A3A28);
+		}
+
 		private boolean isVisuallyDisabled() {
 			return switch (this.role) {
 				case CHANNEL_SLOT -> this.slotIndex >= RadioBaseBoxScreen.this.channels.size();
 				case CHANNEL_ADD -> RadioBaseBoxScreen.this.channels.size() >= RadioBaseNetworkSavedData.MAX_CHANNELS_PER_BOX;
 				case CHANNEL_REMOVE -> RadioBaseBoxScreen.this.channels.size() <= 1;
+				case SAVE -> RadioBaseBoxScreen.this.awaitingSaveResult;
 				default -> ".".equals(this.keyId) && RadioBaseBoxScreen.this.inputMode == InputMode.PASSCODE;
 			};
 		}

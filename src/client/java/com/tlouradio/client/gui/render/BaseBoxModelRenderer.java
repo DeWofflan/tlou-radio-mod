@@ -30,12 +30,12 @@ public final class BaseBoxModelRenderer {
 	public static final float ISOMETRIC_PITCH_DEG = 7.5F;
 	public static final float ISOMETRIC_YAW_DEG = -5.5F;
 
-	private static final int PIP_HALF_WIDTH_PX = 128;
-	private static final int PIP_TOP_EXTENT_PX = 186;
-	private static final int PIP_BOTTOM_EXTENT_PX = 48;
+	private static final int PIP_HALF_WIDTH_PX = 148;
+	private static final int PIP_TOP_EXTENT_PX = 212;
+	private static final int PIP_BOTTOM_EXTENT_PX = 54;
 	private static final float PIP_ORIGIN_Y_RATIO =
 			(float) PIP_TOP_EXTENT_PX / (float) (PIP_TOP_EXTENT_PX + PIP_BOTTOM_EXTENT_PX);
-	private static final float PIP_MODEL_SCALE = 118.0F;
+	private static final float PIP_MODEL_SCALE = 138.0F;
 	private static final int FULL_BRIGHT_LIGHT = 15728880;
 
 	private static final Matrix4f STATIC_ISOMETRIC_MATRIX = new Matrix4f()
@@ -52,9 +52,9 @@ public final class BaseBoxModelRenderer {
 
 	public static StationLayout computeLayout(int screenWidth, int screenHeight) {
 		int centerX = screenWidth / 2;
-		int deckWidth = 186;
-		int deckHeight = 136;
-		int modelFloorY = Mth.clamp(screenHeight / 2 - 22, 108, Math.max(108, screenHeight - deckHeight - 24));
+		int deckWidth = 216;
+		int deckHeight = 152;
+		int modelFloorY = Mth.clamp(screenHeight / 2 - 20, 114, Math.max(114, screenHeight - deckHeight - 24));
 
 		int pipX0 = centerX - PIP_HALF_WIDTH_PX;
 		int pipX1 = centerX + PIP_HALF_WIDTH_PX;
